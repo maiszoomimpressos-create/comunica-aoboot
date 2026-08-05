@@ -10,6 +10,7 @@ import { auth } from "@/lib/auth/auth";
 import { prisma } from "@/lib/db/prisma";
 import { actionOk, actionFail, type ActionResult } from "@/types/action";
 import { toErrorPayload, NotFoundError, ForbiddenError } from "@/lib/server/errors";
+import { passwordSchema } from "@/lib/auth/password-policy";
 
 async function joinTenant(invitationId: string, userId: string) {
   const invitation = await findPendingInvitationById(invitationId);
@@ -47,7 +48,7 @@ export async function acceptInvitationAsExistingUser(
 const newUserSchema = z.object({
   invitationId: z.string().min(1),
   name: z.string().min(2, "Informe seu nome."),
-  password: z.string().min(8, "A senha precisa ter pelo menos 8 caracteres."),
+  password: passwordSchema,
 });
 
 /** For an e-mail with no existing account — creates it, then joins. */

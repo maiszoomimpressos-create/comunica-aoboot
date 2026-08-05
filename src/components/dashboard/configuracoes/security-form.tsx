@@ -1,17 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError, FieldDescription } from "@/components/ui/field";
 import { changePassword } from "@/actions/account/change-password";
+import { passwordSchema } from "@/lib/auth/password-policy";
+import { PasswordStrengthMeter } from "@/components/auth/password-strength-meter";
 
 const formSchema = z.object({
   currentPassword: z.string().min(1, "Informe sua senha atual."),
-  newPassword: z.string().min(8, "A nova senha precisa ter pelo menos 8 caracteres."),
+  newPassword: passwordSchema,
 });
 type FormValues = z.infer<typeof formSchema>;
 
@@ -22,8 +24,10 @@ export function SecurityForm() {
     register,
     handleSubmit,
     reset,
+    control,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({ resolver: zodResolver(formSchema) });
+  const newPassword = useWatch({ control, name: "newPassword" });
 
   async function onSubmit(values: FormValues) {
     setServerError(null);
@@ -49,7 +53,8 @@ export function SecurityForm() {
         <Field data-invalid={!!errors.newPassword}>
           <FieldLabel htmlFor="newPassword">Nova senha</FieldLabel>
           <Input id="newPassword" type="password" {...register("newPassword")} />
-          <FieldDescription>Mínimo de 8 caracteres. Outras sessões serão encerradas.</FieldDescription>
+          <PasswordStrengthMeter password={newPassword ?? ""} />
+          <FieldDescription>Outras sessões serão encerradas.</FieldDescription>
           <FieldError errors={[errors.newPassword]} />
         </Field>
 

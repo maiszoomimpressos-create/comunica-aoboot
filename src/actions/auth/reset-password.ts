@@ -4,10 +4,11 @@ import { z } from "zod";
 import { auth } from "@/lib/auth/auth";
 import { actionOk, actionFail, type ActionResult } from "@/types/action";
 import { toErrorPayload } from "@/lib/server/errors";
+import { passwordSchema } from "@/lib/auth/password-policy";
 
 const schema = z.object({
   token: z.string().min(1),
-  newPassword: z.string().min(8, "A senha precisa ter pelo menos 8 caracteres."),
+  newPassword: passwordSchema,
 });
 
 export async function resetPassword(

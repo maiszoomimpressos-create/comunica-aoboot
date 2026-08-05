@@ -6,10 +6,11 @@ import { auth } from "@/lib/auth/auth";
 import { getAuthenticatedUser } from "@/lib/server/request-context";
 import { actionOk, actionFail, type ActionResult } from "@/types/action";
 import { toErrorPayload } from "@/lib/server/errors";
+import { passwordSchema } from "@/lib/auth/password-policy";
 
 const schema = z.object({
   currentPassword: z.string().min(1, "Informe sua senha atual."),
-  newPassword: z.string().min(8, "A nova senha precisa ter pelo menos 8 caracteres."),
+  newPassword: passwordSchema,
 });
 
 export async function changePassword(

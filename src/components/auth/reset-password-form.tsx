@@ -2,16 +2,18 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Field, FieldGroup, FieldLabel, FieldError, FieldDescription } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { resetPassword } from "@/actions/auth/reset-password";
+import { passwordSchema } from "@/lib/auth/password-policy";
+import { PasswordStrengthMeter } from "@/components/auth/password-strength-meter";
 
 const formSchema = z.object({
-  newPassword: z.string().min(8, "A senha precisa ter pelo menos 8 caracteres."),
+  newPassword: passwordSchema,
 });
 type FormValues = z.infer<typeof formSchema>;
 
@@ -22,8 +24,10 @@ export function ResetPasswordForm({ token }: { token: string }) {
   const {
     register,
     handleSubmit,
+    control,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({ resolver: zodResolver(formSchema) });
+  const newPassword = useWatch({ control, name: "newPassword" });
 
   async function onSubmit(values: FormValues) {
     setServerError(null);
@@ -55,7 +59,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
         <Field data-invalid={!!errors.newPassword}>
           <FieldLabel htmlFor="newPassword">Nova senha</FieldLabel>
           <Input id="newPassword" type="password" placeholder="••••••••" {...register("newPassword")} />
-          <FieldDescription>Mínimo de 8 caracteres.</FieldDescription>
+          <PasswordStrengthMeter password={newPassword ?? ""} />
           <FieldError errors={[errors.newPassword]} />
         </Field>
 

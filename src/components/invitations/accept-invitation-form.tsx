@@ -2,21 +2,23 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Field, FieldGroup, FieldLabel, FieldError, FieldDescription } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import {
   acceptInvitationAsExistingUser,
   acceptInvitationAsNewUser,
 } from "@/actions/invitations/accept-invitation";
+import { passwordSchema } from "@/lib/auth/password-policy";
+import { PasswordStrengthMeter } from "@/components/auth/password-strength-meter";
 
 const formSchema = z.object({
   name: z.string().min(2, "Informe seu nome."),
-  password: z.string().min(8, "A senha precisa ter pelo menos 8 caracteres."),
+  password: passwordSchema,
 });
 type FormValues = z.infer<typeof formSchema>;
 
@@ -37,8 +39,10 @@ export function AcceptInvitationForm({
   const {
     register,
     handleSubmit,
+    control,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({ resolver: zodResolver(formSchema) });
+  const password = useWatch({ control, name: "password" });
 
   async function onSubmitNewUser(values: FormValues) {
     setServerError(null);
@@ -111,7 +115,7 @@ export function AcceptInvitationForm({
         <Field data-invalid={!!errors.password}>
           <FieldLabel htmlFor="password">Senha</FieldLabel>
           <Input id="password" type="password" {...register("password")} />
-          <FieldDescription>Mínimo de 8 caracteres.</FieldDescription>
+          <PasswordStrengthMeter password={password ?? ""} />
           <FieldError errors={[errors.password]} />
         </Field>
 

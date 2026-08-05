@@ -4,12 +4,13 @@ import { z } from "zod";
 import { createTenantWithOwner } from "@/services/onboarding.service";
 import { actionOk, actionFail, type ActionResult } from "@/types/action";
 import { toErrorPayload } from "@/lib/server/errors";
+import { passwordSchema } from "@/lib/auth/password-policy";
 
 const signUpSchema = z.object({
   companyName: z.string().min(2, "Informe o nome da empresa."),
   userName: z.string().min(2, "Informe seu nome."),
   email: z.string().email("E-mail inválido."),
-  password: z.string().min(8, "A senha precisa ter pelo menos 8 caracteres."),
+  password: passwordSchema,
 });
 
 export type SignUpInput = z.infer<typeof signUpSchema>;
