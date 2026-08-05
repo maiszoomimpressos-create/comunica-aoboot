@@ -126,10 +126,12 @@ model Organization {
   activeSessions Session[]
 
   // domínio próprio (RBAC granular, planos, marketplace, auditoria)
-  roles         Role[]
-  subscription  Subscription?
-  tenantModules TenantModule[]
-  auditLogs     AuditLog[]
+  roles                 Role[]
+  subscription          Subscription?
+  tenantModules         TenantModule[]
+  auditLogs             AuditLog[]
+  communicationChannels CommunicationChannel[]
+  channelConnections    ChannelConnection[]
 
   @@index([status])
   @@map("organization")
@@ -311,6 +313,87 @@ model TenantModule {
 
   @@unique([tenantId, moduleId])
   @@map("tenant_module")
+}
+
+// =====================================================================
+// Canais de comunicação — Empresa → Canal → Provedor → Conexão
+// =====================================================================
+// Desenho genérico para múltiplos canais (whatsapp/email/sms/telegram) e
+// múltiplos provedores por canal, para que trocar/adicionar um provedor
+// (ex.: Meta Cloud API, Evolution API) não exija tabelas novas — só um novo
+// valor de enum + uma nova linha em ChannelProvider + uma nova implementação
+// de provider em src/lib/whatsapp (ver PROVIDER_ABSTRACTION).
+
+enum CommunicationChannelType {
+  WHATSAPP
+  EMAIL
+  SMS
+  TELEGRAM
+}
+
+enum ChannelConnectionStatus {
+  PENDING
+  CONNECTING
+  CONNECTED
+  AUTH_ERROR
+  UNAVAILABLE
+  INVALID_TOKEN
+  ERROR
+}
+
+model CommunicationChannel {
+  id        String                   @id @default(cuid())
+  type      CommunicationChannelType
+  createdAt DateTime                 @default(now())
+  updatedAt DateTime                 @updatedAt
+
+  tenantId     String
+  organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  connections ChannelConnection[]
+
+  @@unique([tenantId, type])
+  @@map("communication_channel")
+}
+
+model ChannelProvider {
+  id          String                   @id @default(cuid())
+  key         String                   @unique // "z-api" | "meta-cloud" | "evolution"
+  name        String
+  channelType CommunicationChannelType
+  isActive    Boolean                  @default(false)
+  sortOrder   Int                      @default(0)
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+
+  connections ChannelConnection[]
+
+  @@map("channel_provider")
+}
+
+model ChannelConnection {
+  id             String                  @id @default(cuid())
+  connectionName String
+  phoneNumber    String
+  apiUrl         String
+  apiTokenCipher String // apiToken criptografado (AES-256-GCM) — nunca em texto puro, ver lib/crypto/secret-box.ts
+  status         ChannelConnectionStatus @default(PENDING)
+  lastValidation DateTime?
+  lastError      String?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  tenantId     String
+  organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  channelId String
+  channel   CommunicationChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  providerId String
+  provider   ChannelProvider @relation(fields: [providerId], references: [id])
+
+  @@index([tenantId, channelId])
+  @@map("channel_connection")
 }
 
 // =====================================================================

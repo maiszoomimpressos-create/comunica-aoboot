@@ -94,6 +94,30 @@ async function seedModules() {
   console.log(`Modules: ${MODULES.length} seeded.`);
 }
 
+const CHANNEL_PROVIDERS = [
+  { key: "z-api", name: "Z-API", channelType: "WHATSAPP", isActive: true, sortOrder: 0 },
+  { key: "meta-cloud", name: "Meta Cloud API", channelType: "WHATSAPP", isActive: false, sortOrder: 1 },
+  { key: "evolution", name: "Evolution API", channelType: "WHATSAPP", isActive: false, sortOrder: 2 },
+] as const;
+
+async function seedChannelProviders() {
+  for (const provider of CHANNEL_PROVIDERS) {
+    await prisma.channelProvider.upsert({
+      where: { key: provider.key },
+      create: provider,
+      update: {
+        name: provider.name,
+        channelType: provider.channelType,
+        sortOrder: provider.sortOrder,
+        // isActive is intentionally NOT overwritten on update, same reasoning
+        // as Module.isComingSoon in seedModules(): flipping it live via an
+        // admin action later must survive re-seeding.
+      },
+    });
+  }
+  console.log(`Channel providers: ${CHANNEL_PROVIDERS.length} seeded.`);
+}
+
 async function seedPlatformAdmin() {
   const email = process.env.ADMIN_EMAIL;
   const password = process.env.ADMIN_PASSWORD;
@@ -118,6 +142,7 @@ async function main() {
   await seedPermissions();
   await seedPlans();
   await seedModules();
+  await seedChannelProviders();
   await seedPlatformAdmin();
 }
 

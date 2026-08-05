@@ -15,7 +15,9 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
+    "db:migrate:apply": "node scripts/apply-migrations.mjs",
     "db:seed": "node scripts/run-ts.mjs prisma/seed.ts",
+    "db:sync-roles": "node scripts/run-ts.mjs scripts/sync-role-permissions.ts",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate"
   },

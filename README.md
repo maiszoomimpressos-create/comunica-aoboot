@@ -48,13 +48,14 @@ afeta três pontos da stack, todos com uma solução permanente e documentada
 3. **Prisma `schema-engine`** (usado por `prisma db push`/`migrate`) também é
    nativo e bloqueado aqui — mesmo o Prisma 7 já sendo "rust-free" para
    consultas (usa `@prisma/adapter-pg`, sem binário nativo nenhum para isso).
-   A primeira migration (`prisma/migrations/20260805120000_init`) foi
-   aplicada manualmente com `scripts/apply-init-migration.mjs` (conecta via
-   `pg` puro e registra a migration em `_prisma_migrations`), para que
+   Migrations são aplicadas manualmente com `npm run db:migrate:apply`
+   (`scripts/apply-migrations.mjs`: conecta via `pg` puro, aplica toda pasta
+   em `prisma/migrations/*` ainda não registrada e grava em
+   `_prisma_migrations`, na ordem dos nomes/timestamps), para que
    `prisma migrate deploy` funcione normalmente a partir de qualquer outra
-   máquina/CI sem essa restrição. Novas migrations criadas aqui vão precisar
-   do mesmo processo manual — ou rode `prisma migrate dev` numa máquina sem
-   essa política.
+   máquina/CI sem essa restrição. Toda migration nova criada aqui só precisa
+   da pasta com o `migration.sql` — o script pega automaticamente; ou rode
+   `prisma migrate dev` numa máquina sem essa política.
 4. **`tsx`/`ts-node`** também não instalam (dependem do binário nativo do
    `esbuild`). Scripts standalone em TypeScript (seed, etc.) rodam com
    `node scripts/run-ts.mjs <arquivo>.ts` — usa o suporte nativo do Node 22+

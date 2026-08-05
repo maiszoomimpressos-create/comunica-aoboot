@@ -1,0 +1,21 @@
+import type { SendMessageResult, TestConnectionResult, WhatsappConnectionConfig } from "./types";
+
+/**
+ * Contract every WhatsApp provider (Z-API today; Meta Cloud API, Evolution
+ * API, ... later) must implement. Swapping/adding a provider means writing
+ * a new class implementing this interface and registering it in
+ * registry.ts — nothing in services/actions/UI changes.
+ *
+ * Implementations must never throw: connectivity/auth/HTTP failures are
+ * reported as a normal `{ ok: false, ... }` result, since callers show
+ * these directly as UI state (see PROVIDER_ABSTRACTION in the module plan).
+ */
+export interface WhatsappProvider {
+  key: string;
+  testConnection(config: WhatsappConnectionConfig): Promise<TestConnectionResult>;
+  sendMessage(
+    config: WhatsappConnectionConfig,
+    to: string,
+    text: string
+  ): Promise<SendMessageResult>;
+}

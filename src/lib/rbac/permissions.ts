@@ -25,6 +25,9 @@ export const PERMISSIONS = [
   { code: "integrations.view", category: "integrations", description: "Ver integrações disponíveis" },
   { code: "integrations.manage", category: "integrations", description: "Configurar integrações" },
 
+  { code: "whatsapp.view", category: "whatsapp", description: "Ver conexões WhatsApp" },
+  { code: "whatsapp.manage", category: "whatsapp", description: "Conectar, testar, enviar mensagens e remover conexões WhatsApp" },
+
   { code: "settings.view", category: "settings", description: "Ver configurações" },
   { code: "settings.manage", category: "settings", description: "Alterar configurações" },
 

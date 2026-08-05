@@ -19,3 +19,15 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
   { key: "sms", name: "SMS", category: "messaging", description: "Envio e recebimento de SMS." },
   { key: "payments", name: "Pagamentos", category: "payments", description: "Cobrança e conciliação de pagamentos." },
 ];
+
+/**
+ * Modules with their own dedicated in-app area (a wizard, a management
+ * dashboard, etc.) instead of just a marketplace install/uninstall toggle.
+ * `ModuleCard` links straight into this route once the module is available
+ * (`!isComingSoon`) rather than showing the generic install `Switch`. Adding
+ * a new module's own area later = add one entry here, nothing else in the
+ * marketplace changes.
+ */
+export const MODULE_APP_ROUTES: Record<string, (tenantSlug: string) => string> = {
+  whatsapp: (tenantSlug) => `/app/${tenantSlug}/modulos/whatsapp`,
+};
