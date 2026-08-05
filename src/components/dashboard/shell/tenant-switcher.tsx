@@ -5,6 +5,7 @@ import { ChevronsUpDown, Check, Plus, Building2 } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -38,7 +39,9 @@ export function TenantSwitcher({
         <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
-        <DropdownMenuLabel>Suas empresas</DropdownMenuLabel>
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Suas empresas</DropdownMenuLabel>
+        </DropdownMenuGroup>
         <DropdownMenuSeparator />
         {memberships.map((m) => (
           <DropdownMenuItem
