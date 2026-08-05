@@ -1,0 +1,339 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// =====================================================================
+// BETTER AUTH — identidade, sessão, organização (multiempresa), convites
+// =====================================================================
+// Campos e nomes de modelo escritos à mão para casar exatamente com o que
+// o Better Auth (core + plugins organization/admin) espera via seu adapter
+// Prisma — não gerados pelo `@better-auth/cli` porque essa CLI depende de
+// better-sqlite3 (compilação nativa via node-gyp/Python), indisponível
+// neste ambiente. Conferido campo a campo contra
+// node_modules/@better-auth/core/dist/db/get-tables.mjs e
+// node_modules/better-auth/dist/plugins/{admin,organization}/schema.d.mts.
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // plugin: admin
+  role       String?
+  banned     Boolean?  @default(false)
+  banReason  String?
+  banExpires DateTime?
+
+  sessions    Session[]
+  accounts    Account[]
+  members     Member[]
+  invitations Invitation[] @relation("InvitationInviter")
+  auditLogs   AuditLog[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // plugin: admin (impersonation)
+  impersonatedBy String?
+
+  // plugin: organization (tenant ativo é resolvido pela URL, não por isto —
+  // ver lib/server/request-context.ts; mantido só pelo Better Auth internamente)
+  activeOrganizationId String?
+  activeOrganization   Organization? @relation(fields: [activeOrganizationId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id           String    @id @default(cuid())
+  accountId    String
+  providerId   String
+  accessToken  String?
+  refreshToken String?
+  idToken      String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope        String?
+  password     String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  CANCELED
+}
+
+model Organization {
+  id        String       @id @default(cuid())
+  name      String
+  slug      String       @unique
+  logo      String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime?    @updatedAt
+
+  // additionalFields do plugin organization (ver lib/auth/auth.ts)
+  primaryColor String?
+  status       TenantStatus @default(ACTIVE)
+
+  members       Member[]
+  invitations   Invitation[]
+  activeSessions Session[]
+
+  // domínio próprio (RBAC granular, planos, marketplace, auditoria)
+  roles         Role[]
+  subscription  Subscription?
+  tenantModules TenantModule[]
+  auditLogs     AuditLog[]
+
+  @@index([status])
+  @@map("organization")
+}
+
+model Member {
+  id        String   @id @default(cuid())
+  role      String   @default("member")
+  createdAt DateTime @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@index([userId])
+  @@map("member")
+}
+
+model Invitation {
+  id        String    @id @default(cuid())
+  email     String
+  role      String
+  status    String    @default("pending")
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  inviterId String
+  inviter   User   @relation("InvitationInviter", fields: [inviterId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, email])
+  @@map("invitation")
+}
+
+// =====================================================================
+// RBAC granular — customizável por tenant (não coberto pelo Better Auth)
+// =====================================================================
+
+model Permission {
+  id          String @id @default(cuid())
+  code        String @unique // ex: "members.invite", "billing.manage"
+  category    String
+  description String
+
+  rolePermissions RolePermission[]
+
+  @@map("permission")
+}
+
+model Role {
+  id        String   @id @default(cuid())
+  key       String   // "owner" | "admin" | "member" | "billing" | slug custom
+  name      String
+  isSystem  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId     String
+  organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  rolePermissions RolePermission[]
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+  @@map("role")
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permission")
+}
+
+// =====================================================================
+// Planos / assinaturas (estrutura pronta — sem gateway de pagamento real)
+// =====================================================================
+
+enum BillingInterval {
+  MONTHLY
+  YEARLY
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  EXPIRED
+}
+
+model Plan {
+  id         String          @id @default(cuid())
+  name       String
+  slug       String          @unique
+  priceCents Int
+  currency   String          @default("BRL")
+  interval   BillingInterval @default(MONTHLY)
+  features   Json
+  isActive   Boolean         @default(true)
+  sortOrder  Int             @default(0)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  subscriptions Subscription[]
+
+  @@map("plan")
+}
+
+model Subscription {
+  id                     String             @id @default(cuid())
+  status                 SubscriptionStatus @default(TRIALING)
+  currentPeriodStart     DateTime           @default(now())
+  currentPeriodEnd       DateTime
+  cancelAtPeriodEnd      Boolean            @default(false)
+  externalCustomerId     String?
+  externalSubscriptionId String?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  tenantId String       @unique
+  organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  planId String
+  plan   Plan   @relation(fields: [planId], references: [id])
+
+  @@map("subscription")
+}
+
+// =====================================================================
+// Marketplace de módulos — só estrutura visual + banco nesta fase
+// =====================================================================
+
+model Module {
+  id           String   @id @default(cuid())
+  key          String   @unique // "whatsapp" | "telegram" | "instagram" | "email" | "sms" | "payments"
+  name         String
+  description  String
+  icon         String?
+  category     String
+  isComingSoon Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenantModules TenantModule[]
+
+  @@map("module")
+}
+
+enum TenantModuleStatus {
+  NOT_INSTALLED
+  INSTALLED
+  COMING_SOON
+}
+
+model TenantModule {
+  id          String             @id @default(cuid())
+  status      TenantModuleStatus @default(NOT_INSTALLED)
+  installedAt DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  tenantId String
+  organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  moduleId String
+  module   Module @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, moduleId])
+  @@map("tenant_module")
+}
+
+// =====================================================================
+// Auditoria
+// =====================================================================
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  action      String   // "tenant.updated", "member.invited", "role.permissions_changed", ...
+  targetType  String?
+  targetId    String?
+  metadata    Json?
+  ip          String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  tenantId     String?
+  organization Organization? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  actorUserId String?
+  actor       User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([actorUserId])
+  @@map("audit_log")
+}
