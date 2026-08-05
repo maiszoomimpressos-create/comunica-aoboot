@@ -24,10 +24,10 @@ export function Hero() {
           {siteConfig.description}
         </p>
         <div className="mt-10 flex flex-col gap-3 sm:flex-row">
-          <Button size="lg" render={<Link href="/cadastro" />}>
+          <Button size="lg" nativeButton={false} render={<Link href="/cadastro" />}>
             Criar conta grátis
           </Button>
-          <Button size="lg" variant="outline" render={<Link href="/precos" />}>
+          <Button size="lg" variant="outline" nativeButton={false} render={<Link href="/precos" />}>
             Ver planos
           </Button>
         </div>

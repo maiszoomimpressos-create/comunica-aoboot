@@ -62,6 +62,7 @@ export async function PricingTeaser() {
               <Button
                 className="mt-6"
                 variant={highlighted ? "default" : "outline"}
+                nativeButton={false}
                 render={<Link href="/cadastro" />}
               >
                 Começar

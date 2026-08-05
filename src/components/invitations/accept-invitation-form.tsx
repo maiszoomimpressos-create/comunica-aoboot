@@ -69,7 +69,7 @@ export function AcceptInvitationForm({
           Já existe uma conta com o e-mail <strong>{email}</strong>. Faça login para aceitar o
           convite para <strong>{tenantName}</strong>.
         </p>
-        <Button render={<Link href={`/login?next=/convite/${invitationId}`} />}>
+        <Button nativeButton={false} render={<Link href={`/login?next=/convite/${invitationId}`} />}>
           Entrar para aceitar
         </Button>
       </div>

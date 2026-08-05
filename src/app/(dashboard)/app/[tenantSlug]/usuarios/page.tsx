@@ -38,7 +38,7 @@ export default async function UsuariosPage({
           </p>
         </div>
         {canInvite && (
-          <Button render={<Link href={`/app/${tenantSlug}/usuarios/convidar`} />}>
+          <Button nativeButton={false} render={<Link href={`/app/${tenantSlug}/usuarios/convidar`} />}>
             Convidar usuário
           </Button>
         )}

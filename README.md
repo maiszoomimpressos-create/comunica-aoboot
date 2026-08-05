@@ -6,9 +6,10 @@ painel administrativo. Módulos de canal (WhatsApp, Telegram, Instagram,
 E-mail, SMS, IA) são fases futuras — esta base não implementa nenhum deles,
 só a estrutura pronta para recebê-los.
 
-Stack: Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS v4 ·
-shadcn/ui · Prisma 7 (driver adapter `@prisma/adapter-pg`) · PostgreSQL
-(Supabase) · Better Auth (email/senha + plugins `organization`/`admin`).
+Stack: Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS v3 (ver
+nota abaixo sobre por que não v4) · shadcn/ui · Prisma 7 (driver adapter
+`@prisma/adapter-pg`) · PostgreSQL (Supabase) · Better Auth (email/senha +
+plugins `organization`/`admin`).
 
 ## Getting started
 
@@ -34,12 +35,16 @@ afeta três pontos da stack, todos com uma solução permanente e documentada
    fallback em WASM. Use os scripts `dev:webpack`/`build:webpack` nesta
    máquina; `dev`/`build` (Turbopack) continuam sendo os scripts corretos
    para qualquer outra máquina/CI sem essa restrição.
-2. **Motor nativo do Tailwind v4** (`@tailwindcss/oxide`) também é bloqueado,
-   mas tem um fallback oficial em WASM (`@tailwindcss/oxide-wasm32-wasi`).
-   `scripts/ensure-tailwind-wasm-fallback.mjs` roda automaticamente no
-   `postinstall` e o instala à força (`npm` recusa instalá-lo sozinho por
-   achar a plataforma incompatível) só quando o nativo falha — não tem custo
-   em máquinas sem essa restrição.
+2. **Tailwind v4 não funciona nesta máquina, nativo nem WASM** — por isso o
+   projeto usa **Tailwind v3** (`tailwind.config.ts` + `postcss.config.mjs`
+   clássicos), que roda 100% em JavaScript, sem nenhum binário. O motor
+   nativo (`@tailwindcss/oxide`) é bloqueado como os outros; o fallback WASM
+   oficial (`@tailwindcss/oxide-wasm32-wasi`) carrega sem erro, mas seu
+   `Scanner.scan()` retorna sempre 0 classes nesta máquina — confirmado
+   isolando o pacote diretamente, não é um problema de configuração. Como
+   não existe um motor 100% JS para o v4 (só nativo ou WASM), não há
+   contorno: quem quiser v4 de verdade precisa rodar numa máquina sem essa
+   política.
 3. **Prisma `schema-engine`** (usado por `prisma db push`/`migrate`) também é
    nativo e bloqueado aqui — mesmo o Prisma 7 já sendo "rust-free" para
    consultas (usa `@prisma/adapter-pg`, sem binário nativo nenhum para isso).
