@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import tailwindcssAnimate from "tailwindcss-animate";
 
 // Tailwind v3 (not v4): this machine's Application Control Policy blocks the
 // native Oxide binary, and the WASM fallback loads without error but can't
@@ -99,7 +100,7 @@ const config: Config = {
       },
     },
   },
-  plugins: [require("tailwindcss-animate")],
+  plugins: [tailwindcssAnimate],
 };
 
 export default config;
