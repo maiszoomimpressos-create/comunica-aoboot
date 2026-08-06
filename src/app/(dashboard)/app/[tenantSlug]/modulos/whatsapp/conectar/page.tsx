@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
-import { listAllProvidersForChannelType } from "@/repositories/channel-provider.repository";
-import { WhatsappConnectWizard } from "@/components/dashboard/whatsapp/whatsapp-connect-wizard";
+import { WHATSAPP_PRODUCTS } from "@/config/whatsapp-products";
+import { WhatsappProductCard } from "@/components/dashboard/whatsapp/whatsapp-product-card";
 
-export const metadata: Metadata = { title: "Conectar WhatsApp" };
+export const metadata: Metadata = { title: "WhatsApp" };
 
-export default async function ConectarWhatsappPage({
+export default async function WhatsappProductsPage({
   params,
 }: {
   params: Promise<{ tenantSlug: string }>;
@@ -15,7 +17,28 @@ export default async function ConectarWhatsappPage({
   const ctx = await getRequestContext(tenantSlug);
   requirePermission(ctx, "whatsapp.manage");
 
-  const providers = await listAllProvidersForChannelType("WHATSAPP");
+  return (
+    <div className="max-w-2xl space-y-6">
+      <Link
+        href={`/app/${tenantSlug}/modulos/whatsapp`}
+        className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="size-4" />
+        WhatsApp
+      </Link>
 
-  return <WhatsappConnectWizard tenantSlug={tenantSlug} providers={providers} />;
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">O que você quer fazer com o WhatsApp?</h1>
+        <p className="text-muted-foreground">
+          Escolha o tipo de uso pra configurar — cada um tem seu próprio fluxo de conexão.
+        </p>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        {WHATSAPP_PRODUCTS.map((product) => (
+          <WhatsappProductCard key={product.key} tenantSlug={tenantSlug} product={product} />
+        ))}
+      </div>
+    </div>
+  );
 }
