@@ -20,7 +20,7 @@ export function Topbar({
 }: {
   tenantSlug: string;
   permissions: PermissionCode[];
-  user: { name: string; email: string; image: string | null };
+  user: { name: string; email: string; image: string | null; isPlatformAdmin: boolean };
 }) {
   const items = NAV_ITEMS.filter((item) => !item.permission || permissions.includes(item.permission));
 
@@ -56,6 +56,7 @@ export function Topbar({
         email={user.email}
         image={user.image}
         tenantSlug={tenantSlug}
+        isPlatformAdmin={user.isPlatformAdmin}
       />
     </header>
   );

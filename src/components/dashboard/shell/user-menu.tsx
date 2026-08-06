@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { LogOut, Settings, User as UserIcon } from "lucide-react";
+import { LogOut, Settings, ShieldCheck, User as UserIcon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,11 +20,13 @@ export function UserMenu({
   email,
   image,
   tenantSlug,
+  isPlatformAdmin,
 }: {
   name: string;
   email: string;
   image: string | null;
   tenantSlug: string;
+  isPlatformAdmin: boolean;
 }) {
   const router = useRouter();
   const initials = name
@@ -68,6 +70,15 @@ export function UserMenu({
           <Settings className="size-4" />
           Segurança
         </DropdownMenuItem>
+        {isPlatformAdmin && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem render={<Link href="/admin" />}>
+              <ShieldCheck className="size-4" />
+              Administração do sistema
+            </DropdownMenuItem>
+          </>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem variant="destructive" onClick={handleSignOut}>
           <LogOut className="size-4" />

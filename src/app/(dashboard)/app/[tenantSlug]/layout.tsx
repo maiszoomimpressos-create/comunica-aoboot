@@ -22,7 +22,12 @@ export default async function TenantLayout({
         <Topbar
           tenantSlug={tenantSlug}
           permissions={ctx.permissions}
-          user={{ name: user.name, email: user.email, image: user.image }}
+          user={{
+            name: user.name,
+            email: user.email,
+            image: user.image,
+            isPlatformAdmin: user.isPlatformAdmin,
+          }}
         />
         <main className="flex-1 overflow-y-auto p-4 lg:p-8">{children}</main>
       </div>
