@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Building2, Users, CreditCard, LayoutGrid } from "lucide-react";
+import { LayoutDashboard, Building2, Users, CreditCard, LayoutGrid, MessageCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { siteConfig } from "@/config/site";
 
@@ -12,6 +12,7 @@ const ITEMS = [
   { label: "Usuários", href: "/admin/usuarios", icon: Users },
   { label: "Planos", href: "/admin/planos", icon: CreditCard },
   { label: "Módulos", href: "/admin/modulos", icon: LayoutGrid },
+  { label: "WhatsApp", href: "/admin/whatsapp", icon: MessageCircle },
 ];
 
 export function AdminSidebar() {

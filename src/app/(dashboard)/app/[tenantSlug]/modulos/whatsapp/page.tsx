@@ -30,7 +30,7 @@ export default async function WhatsappModulePage({
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">WhatsApp</h1>
-          <p className="text-muted-foreground">Conexões ativas para envio de mensagens.</p>
+          <p className="text-muted-foreground">Conexões e solicitações de WhatsApp da sua empresa.</p>
         </div>
         {canManage && (
           <Button

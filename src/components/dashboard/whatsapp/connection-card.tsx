@@ -44,6 +44,9 @@ export function ConnectionCard({
   const [showSend, setShowSend] = useState(false);
   const [retesting, setRetesting] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Still just a request — a platform admin hasn't filled in the Z-API
+  // credentials yet, so there's nothing to test/send/manage a key for.
+  const isConfigured = !!connection.apiUrl;
 
   async function handleRetest() {
     setRetesting(true);
@@ -83,16 +86,26 @@ export function ConnectionCard({
         <p className="mt-2 text-sm text-destructive">{connection.lastError}</p>
       )}
 
+      {!isConfigured && (
+        <p className="mt-3 text-sm text-muted-foreground">
+          Aguardando nossa equipe configurar essa conexão.
+        </p>
+      )}
+
       {canManage && (
         <>
           <div className="mt-4 flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => setShowSend((v) => !v)}>
-              {showSend ? "Fechar" : "Enviar mensagem de teste"}
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleRetest} disabled={retesting}>
-              <RefreshCw className={cn("size-4", retesting && "animate-spin")} />
-              {retesting ? "Testando…" : "Testar novamente"}
-            </Button>
+            {isConfigured && (
+              <>
+                <Button variant="outline" size="sm" onClick={() => setShowSend((v) => !v)}>
+                  {showSend ? "Fechar" : "Enviar mensagem de teste"}
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleRetest} disabled={retesting}>
+                  <RefreshCw className={cn("size-4", retesting && "animate-spin")} />
+                  {retesting ? "Testando…" : "Testar novamente"}
+                </Button>
+              </>
+            )}
             <AlertDialog>
               <AlertDialogTrigger render={<Button variant="ghost" size="sm" disabled={deleting} />}>
                 <Trash2 className="size-4" />
@@ -102,8 +115,9 @@ export function ConnectionCard({
                 <AlertDialogHeader>
                   <AlertDialogTitle>Remover {connection.connectionName}?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    A empresa deixará de conseguir enviar mensagens por este número até que uma nova
-                    conexão seja criada.
+                    {isConfigured
+                      ? "A empresa deixará de conseguir enviar mensagens por este número até que uma nova conexão seja criada."
+                      : "Essa solicitação será cancelada."}
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
@@ -114,19 +128,21 @@ export function ConnectionCard({
             </AlertDialog>
           </div>
 
-          {showSend && (
+          {showSend && isConfigured && (
             <div className="mt-4 border-t border-border pt-4">
               <SendTestMessageForm tenantSlug={tenantSlug} connectionId={connection.id} />
             </div>
           )}
 
-          <ApiKeySection
-            tenantSlug={tenantSlug}
-            connectionId={connection.id}
-            apiKeyPrefix={connection.apiKeyPrefix}
-            apiKeyCreatedAt={connection.apiKeyCreatedAt}
-            apiKeyLastUsedAt={connection.apiKeyLastUsedAt}
-          />
+          {isConfigured && (
+            <ApiKeySection
+              tenantSlug={tenantSlug}
+              connectionId={connection.id}
+              apiKeyPrefix={connection.apiKeyPrefix}
+              apiKeyCreatedAt={connection.apiKeyCreatedAt}
+              apiKeyLastUsedAt={connection.apiKeyLastUsedAt}
+            />
+          )}
         </>
       )}
     </Card>

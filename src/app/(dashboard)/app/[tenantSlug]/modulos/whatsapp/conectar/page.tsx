@@ -3,8 +3,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
-import { WHATSAPP_PRODUCTS } from "@/config/whatsapp-products";
-import { WhatsappProductCard } from "@/components/dashboard/whatsapp/whatsapp-product-card";
+import { WhatsappProductRequestForm } from "@/components/dashboard/whatsapp/whatsapp-product-request-form";
 
 export const metadata: Metadata = { title: "WhatsApp" };
 
@@ -30,15 +29,12 @@ export default async function WhatsappProductsPage({
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">O que você quer fazer com o WhatsApp?</h1>
         <p className="text-muted-foreground">
-          Escolha o tipo de uso pra configurar — cada um tem seu próprio fluxo de conexão.
+          Marque o que você quer usar e informe o número — nossa equipe configura a conexão pra
+          você.
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        {WHATSAPP_PRODUCTS.map((product) => (
-          <WhatsappProductCard key={product.key} tenantSlug={tenantSlug} product={product} />
-        ))}
-      </div>
+      <WhatsappProductRequestForm tenantSlug={tenantSlug} />
     </div>
   );
 }

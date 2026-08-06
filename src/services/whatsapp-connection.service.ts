@@ -3,12 +3,15 @@ import { prisma } from "@/lib/db/prisma";
 import { encryptSecret, decryptSecret } from "@/lib/crypto/secret-box";
 import { generateApiKey, hashApiKey } from "@/lib/whatsapp/api-key";
 import { getWhatsappProvider } from "@/lib/whatsapp/registry";
+import { WHATSAPP_PRODUCTS } from "@/config/whatsapp-products";
 import type {
   SendMessageResult,
   TestConnectionResult,
   WhatsappConnectionConfig,
 } from "@/lib/whatsapp/types";
 import {
+  ensureChannel,
+  createPendingConnection,
   getConnectionSummary,
   getConnectionWithSecret,
   getConnectionByApiKeyHash,
@@ -18,7 +21,7 @@ import {
   updateConnectionStatus,
   type ChannelConnectionSummary,
 } from "@/repositories/channel-connection.repository";
-import { getProviderById } from "@/repositories/channel-provider.repository";
+import { getProviderByKey } from "@/repositories/channel-provider.repository";
 import {
   ConflictError,
   NotFoundError,
@@ -27,9 +30,10 @@ import {
 } from "@/lib/server/errors";
 
 const WHATSAPP_MODULE_KEY = "whatsapp";
+const DEFAULT_PROVIDER_KEY = "z-api"; // only active provider today — see ChannelProvider seed
 
 /** Tests provider credentials without touching the database — used by the
- * wizard's "Testar conexão" button before anything is saved. */
+ * admin's "Testar e salvar" action (see provisionConnection). */
 export async function testConnection(
   providerKey: string,
   config: WhatsappConnectionConfig
@@ -38,33 +42,75 @@ export async function testConnection(
   return provider.testConnection(config);
 }
 
-export interface CreateConnectionInput {
-  providerId: string;
-  connectionName: string;
+export interface RequestConnectionInput {
+  productKeys: string[];
   phoneNumber: string;
+}
+
+/**
+ * Tenant-facing: records a connection *request* (product(s) + phone
+ * number) with no credentials — a platform admin fills those in later via
+ * `provisionConnection`. Does NOT mark the module as installed; that only
+ * happens once the connection is actually provisioned and working.
+ */
+export async function requestConnection(
+  tenantId: string,
+  input: RequestConnectionInput
+): Promise<ChannelConnectionSummary> {
+  const selectedProducts = WHATSAPP_PRODUCTS.filter(
+    (p) => input.productKeys.includes(p.key) && p.available
+  );
+  if (selectedProducts.length === 0) {
+    throw new ValidationError("Selecione ao menos um produto disponível.");
+  }
+  if (!input.phoneNumber.trim()) {
+    throw new ValidationError("Informe o número do WhatsApp.");
+  }
+
+  const provider = await getProviderByKey(DEFAULT_PROVIDER_KEY);
+  if (!provider) throw new NotFoundError("Provedor padrão não configurado.");
+
+  const channel = await ensureChannel(tenantId, "WHATSAPP");
+
+  const connection = await createPendingConnection({
+    tenantId,
+    channelId: channel.id,
+    providerId: provider.id,
+    connectionName: selectedProducts.map((p) => p.name).join(", "),
+    phoneNumber: input.phoneNumber,
+  });
+
+  const summary = await getConnectionSummary(tenantId, connection.id);
+  if (!summary) throw new NotFoundError("Solicitação criada, mas não encontrada ao recarregar.");
+  return summary;
+}
+
+export interface ProvisionConnectionInput {
   apiUrl: string;
   apiToken: string;
 }
 
 /**
- * Re-validates the credentials server-side (never trusts the client's
- * reported test result) and, only on success, persists the channel +
- * connection and marks the WhatsApp module as INSTALLED for this tenant —
- * all in one transaction. Throws (without writing anything) if the test
- * fails, carrying the exact reason so the UI can show it.
+ * Admin-facing: fills in the real Z-API credentials for an existing
+ * PENDING connection request. Re-validates server-side before persisting
+ * (never trusts anything blindly) and marks the WhatsApp module INSTALLED
+ * for that tenant on success, all in one transaction. Throws (without
+ * writing anything) if the test fails — the connection stays PENDING so
+ * the admin can just fix the credentials and try again.
  */
-export async function createConnection(
+export async function provisionConnection(
   tenantId: string,
-  input: CreateConnectionInput
+  connectionId: string,
+  input: ProvisionConnectionInput
 ): Promise<ChannelConnectionSummary> {
-  const provider = await getProviderById(input.providerId);
-  if (!provider) throw new NotFoundError("Provedor não encontrado.");
-  if (!provider.isActive) throw new ConflictError("Este provedor ainda não está disponível.");
+  const connection = await getConnectionWithSecret(tenantId, connectionId);
+  if (!connection) throw new NotFoundError("Conexão não encontrada.");
 
-  const testResult = await testConnection(provider.key, {
+  const provider = getWhatsappProvider(connection.provider.key);
+  const testResult = await provider.testConnection({
     apiUrl: input.apiUrl,
     apiToken: input.apiToken,
-    phoneNumber: input.phoneNumber,
+    phoneNumber: connection.phoneNumber,
   });
 
   if (!testResult.ok) {
@@ -73,26 +119,16 @@ export async function createConnection(
 
   const apiTokenCipher = encryptSecret(input.apiToken);
 
-  const connectionId = await prisma.$transaction(async (tx) => {
-    const channel = await tx.communicationChannel.upsert({
-      where: { tenantId_type: { tenantId, type: "WHATSAPP" } },
-      create: { tenantId, type: "WHATSAPP" },
-      update: {},
-    });
-
-    const created = await tx.channelConnection.create({
+  await prisma.$transaction(async (tx) => {
+    await tx.channelConnection.updateMany({
+      where: { id: connectionId, tenantId },
       data: {
-        tenantId,
-        channelId: channel.id,
-        providerId: provider.id,
-        connectionName: input.connectionName,
-        phoneNumber: input.phoneNumber,
         apiUrl: input.apiUrl,
         apiTokenCipher,
         status: "CONNECTED",
         lastValidation: new Date(),
+        lastError: null,
       },
-      select: { id: true },
     });
 
     const whatsappModule = await tx.module.findUnique({ where: { key: WHATSAPP_MODULE_KEY } });
@@ -108,12 +144,10 @@ export async function createConnection(
         update: { status: "INSTALLED", installedAt: new Date() },
       });
     }
-
-    return created.id;
   });
 
   const summary = await getConnectionSummary(tenantId, connectionId);
-  if (!summary) throw new NotFoundError("Conexão criada, mas não encontrada ao recarregar.");
+  if (!summary) throw new NotFoundError("Conexão provisionada, mas não encontrada ao recarregar.");
   return summary;
 }
 
@@ -125,6 +159,9 @@ export async function sendTestMessage(
 ): Promise<SendMessageResult> {
   const connection = await getConnectionWithSecret(tenantId, connectionId);
   if (!connection) throw new NotFoundError("Conexão não encontrada.");
+  if (!connection.apiUrl || !connection.apiTokenCipher) {
+    throw new ConflictError("Esta conexão ainda não foi configurada.");
+  }
 
   const apiToken = decryptSecret(connection.apiTokenCipher);
   const provider = getWhatsappProvider(connection.provider.key);
@@ -143,6 +180,9 @@ export async function retestConnection(
 ): Promise<TestConnectionResult> {
   const connection = await getConnectionWithSecret(tenantId, connectionId);
   if (!connection) throw new NotFoundError("Conexão não encontrada.");
+  if (!connection.apiUrl || !connection.apiTokenCipher) {
+    throw new ConflictError("Esta conexão ainda não foi configurada.");
+  }
 
   const apiToken = decryptSecret(connection.apiTokenCipher);
   const provider = getWhatsappProvider(connection.provider.key);
@@ -203,6 +243,9 @@ export async function sendPurchaseConfirmation(
   if (!connection) throw new UnauthorizedError("Chave de API inválida.");
   if (connection.status !== "CONNECTED") {
     throw new ConflictError("Esta conexão não está ativa no momento.");
+  }
+  if (!connection.apiUrl || !connection.apiTokenCipher) {
+    throw new ConflictError("Esta conexão não está totalmente configurada.");
   }
 
   await touchApiKeyLastUsed(connection.id);

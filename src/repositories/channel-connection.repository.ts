@@ -5,7 +5,7 @@ export interface ChannelConnectionSummary {
   id: string;
   connectionName: string;
   phoneNumber: string;
-  apiUrl: string;
+  apiUrl: string | null;
   status: ChannelConnectionStatus;
   lastValidation: Date | null;
   lastError: string | null;
@@ -70,19 +70,21 @@ export async function getConnectionWithSecret(tenantId: string, connectionId: st
   });
 }
 
-export interface CreateConnectionInput {
+export interface CreatePendingConnectionInput {
   tenantId: string;
   channelId: string;
   providerId: string;
   connectionName: string;
   phoneNumber: string;
-  apiUrl: string;
-  apiTokenCipher: string;
-  status: ChannelConnectionStatus;
-  lastValidation: Date | null;
 }
 
-export function createConnection(input: CreateConnectionInput) {
+/** Creates a connection request with no credentials yet — `status` defaults
+ * to PENDING (schema default). A platform admin fills in the real
+ * credentials later — see whatsapp-connection.service.ts's
+ * `provisionConnection`, which writes them directly inside a transaction
+ * (alongside the TenantModule upsert), same pattern as every other
+ * multi-write flow in this service. */
+export function createPendingConnection(input: CreatePendingConnectionInput) {
   return prisma.channelConnection.create({ data: input });
 }
 
@@ -136,4 +138,45 @@ export function touchApiKeyLastUsed(connectionId: string) {
     where: { id: connectionId },
     data: { apiKeyLastUsedAt: new Date() },
   });
+}
+
+// --- Platform admin (cross-tenant) -----------------------------------------
+
+export interface AdminChannelConnectionRow {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  tenantSlug: string;
+  connectionName: string;
+  phoneNumber: string;
+  status: ChannelConnectionStatus;
+  providerName: string;
+  createdAt: Date;
+}
+
+/** Every connection across every tenant — the queue platform admins work
+ * from at /admin/whatsapp to provision Z-API credentials for pending
+ * requests. Ordered PENDING-first (enum declaration order in schema.prisma
+ * puts PENDING first, so `status: "asc"` sorts it to the top), newest
+ * first within each status. */
+export async function listAllConnectionsForAdmin(): Promise<AdminChannelConnectionRow[]> {
+  const connections = await prisma.channelConnection.findMany({
+    orderBy: [{ status: "asc" }, { createdAt: "desc" }],
+    include: {
+      organization: { select: { name: true, slug: true } },
+      provider: { select: { name: true } },
+    },
+  });
+
+  return connections.map((c) => ({
+    id: c.id,
+    tenantId: c.tenantId,
+    tenantName: c.organization.name,
+    tenantSlug: c.organization.slug,
+    connectionName: c.connectionName,
+    phoneNumber: c.phoneNumber,
+    status: c.status,
+    providerName: c.provider.name,
+    createdAt: c.createdAt,
+  }));
 }

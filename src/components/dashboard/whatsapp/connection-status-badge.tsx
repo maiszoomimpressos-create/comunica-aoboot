@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import type { ChannelConnectionStatus } from "@/generated/prisma/client";
 
 const STATUS_LABEL: Record<ChannelConnectionStatus, string> = {
-  PENDING: "Pendente",
+  PENDING: "Aguardando configuração",
   CONNECTING: "Conectando…",
   CONNECTED: "Conectado",
   AUTH_ERROR: "Erro de autenticação",

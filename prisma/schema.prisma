@@ -375,8 +375,11 @@ model ChannelConnection {
   id             String                  @id @default(cuid())
   connectionName String
   phoneNumber    String
-  apiUrl         String
-  apiTokenCipher String // apiToken criptografado (AES-256-GCM) — nunca em texto puro, ver lib/crypto/secret-box.ts
+  // Nulos enquanto a conexão está só "solicitada" (status PENDING) — o
+  // tenant não digita mais isso, quem preenche é um admin da plataforma em
+  // /admin/whatsapp (ver whatsapp-connection.service.ts: provisionConnection).
+  apiUrl         String?
+  apiTokenCipher String? // apiToken criptografado (AES-256-GCM) — nunca em texto puro, ver lib/crypto/secret-box.ts
   status         ChannelConnectionStatus @default(PENDING)
   lastValidation DateTime?
   lastError      String?
