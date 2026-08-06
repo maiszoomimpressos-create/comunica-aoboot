@@ -11,6 +11,10 @@ export interface ChannelConnectionSummary {
   lastError: string | null;
   createdAt: Date;
   provider: { id: string; key: string; name: string };
+  // Never the hash — just enough to render the "API" section in the UI.
+  apiKeyPrefix: string | null;
+  apiKeyCreatedAt: Date | null;
+  apiKeyLastUsedAt: Date | null;
 }
 
 const summarySelect = {
@@ -23,6 +27,9 @@ const summarySelect = {
   lastError: true,
   createdAt: true,
   provider: { select: { id: true, key: true, name: true } },
+  apiKeyPrefix: true,
+  apiKeyCreatedAt: true,
+  apiKeyLastUsedAt: true,
 } as const;
 
 /** Get-or-create the tenant's channel row for a given type (WHATSAPP, ...). */
@@ -92,4 +99,41 @@ export function updateConnectionStatus(
 
 export function deleteConnection(tenantId: string, connectionId: string) {
   return prisma.channelConnection.deleteMany({ where: { id: connectionId, tenantId } });
+}
+
+// --- API key (machine-to-machine auth) -----------------------------------
+
+export function setConnectionApiKey(
+  tenantId: string,
+  connectionId: string,
+  data: { apiKeyHash: string; apiKeyPrefix: string }
+) {
+  return prisma.channelConnection.updateMany({
+    where: { id: connectionId, tenantId },
+    data: { ...data, apiKeyCreatedAt: new Date(), apiKeyLastUsedAt: null },
+  });
+}
+
+export function revokeConnectionApiKey(tenantId: string, connectionId: string) {
+  return prisma.channelConnection.updateMany({
+    where: { id: connectionId, tenantId },
+    data: { apiKeyHash: null, apiKeyPrefix: null, apiKeyCreatedAt: null, apiKeyLastUsedAt: null },
+  });
+}
+
+/** Resolves a connection from an inbound API key hash — deliberately NOT
+ * tenant-scoped, since this is what identifies the tenant/connection from
+ * an anonymous machine-to-machine request in the first place. */
+export function getConnectionByApiKeyHash(apiKeyHash: string) {
+  return prisma.channelConnection.findUnique({
+    where: { apiKeyHash },
+    include: { provider: true },
+  });
+}
+
+export function touchApiKeyLastUsed(connectionId: string) {
+  return prisma.channelConnection.update({
+    where: { id: connectionId },
+    data: { apiKeyLastUsedAt: new Date() },
+  });
 }

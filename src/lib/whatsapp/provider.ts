@@ -18,4 +18,12 @@ export interface WhatsappProvider {
     to: string,
     text: string
   ): Promise<SendMessageResult>;
+  /** `image` is a URL or a `data:image/...;base64,...` data URI — never a raw Buffer,
+   * so every provider implementation can pass it straight through to its own API. */
+  sendImage(
+    config: WhatsappConnectionConfig,
+    to: string,
+    image: string,
+    caption?: string
+  ): Promise<SendMessageResult>;
 }

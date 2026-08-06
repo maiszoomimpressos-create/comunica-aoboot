@@ -383,6 +383,13 @@ model ChannelConnection {
   createdAt      DateTime                @default(now())
   updatedAt      DateTime                @updatedAt
 
+  // Chave de API pra chamadas máquina-a-máquina (ver lib/api/v1/api-key-handler.ts).
+  // Só o hash é salvo; o texto puro é mostrado uma única vez na hora de gerar.
+  apiKeyHash       String?   @unique
+  apiKeyPrefix     String? // ex: "bw_live_a1b2c3d4" — só identificação visual, nunca a chave inteira de novo
+  apiKeyCreatedAt  DateTime?
+  apiKeyLastUsedAt DateTime?
+
   tenantId     String
   organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 

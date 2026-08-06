@@ -38,6 +38,10 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
  * Never throws — every failure mode (network error, timeout, non-2xx,
  * unexpected body) resolves to a typed result so callers can show it
  * directly as UI state.
+ *
+ * `send-image` accepts `image` as either a URL or a
+ * `data:image/png;base64,...` data URI, plus an optional `caption` — used
+ * for the purchase-confirmation QR code send (see whatsapp-connection.service.ts).
  */
 export class ZApiProvider implements WhatsappProvider {
   key = "z-api";
@@ -93,14 +97,38 @@ export class ZApiProvider implements WhatsappProvider {
     to: string,
     text: string
   ): Promise<SendMessageResult> {
-    const url = `${trimTrailingSlash(config.apiUrl)}/send-text`;
+    return this.postJson(config, "send-text", { phone: to, message: text });
+  }
+
+  async sendImage(
+    config: WhatsappConnectionConfig,
+    to: string,
+    image: string,
+    caption?: string
+  ): Promise<SendMessageResult> {
+    return this.postJson(config, "send-image", {
+      phone: to,
+      image,
+      ...(caption ? { caption } : {}),
+    });
+  }
+
+  /** Shared POST-JSON-parse-response plumbing behind send-text/send-image —
+   * same endpoint family, same response envelope ({ zaapId, messageId, id }
+   * on success), only the path and body differ. */
+  private async postJson(
+    config: WhatsappConnectionConfig,
+    endpoint: string,
+    body: Record<string, unknown>
+  ): Promise<SendMessageResult> {
+    const url = `${trimTrailingSlash(config.apiUrl)}/${endpoint}`;
 
     let response: Response;
     try {
       response = await fetchWithTimeout(url, {
         method: "POST",
         headers: buildHeaders(config.apiToken, { "Content-Type": "application/json" }),
-        body: JSON.stringify({ phone: to, message: text }),
+        body: JSON.stringify(body),
       });
     } catch {
       return { ok: false, message: "Falha de comunicação com a instância." };

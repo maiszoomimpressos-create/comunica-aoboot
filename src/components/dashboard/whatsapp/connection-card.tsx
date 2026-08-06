@@ -19,6 +19,7 @@ import {
 import { cn } from "@/lib/utils";
 import { ConnectionStatusBadge } from "./connection-status-badge";
 import { SendTestMessageForm } from "./send-test-message-form";
+import { ApiKeySection } from "./api-key-section";
 import { retestWhatsappConnectionAction } from "@/actions/whatsapp/retest-connection";
 import { deleteWhatsappConnectionAction } from "@/actions/whatsapp/delete-connection";
 import type { ChannelConnectionSummary } from "@/repositories/channel-connection.repository";
@@ -118,6 +119,14 @@ export function ConnectionCard({
               <SendTestMessageForm tenantSlug={tenantSlug} connectionId={connection.id} />
             </div>
           )}
+
+          <ApiKeySection
+            tenantSlug={tenantSlug}
+            connectionId={connection.id}
+            apiKeyPrefix={connection.apiKeyPrefix}
+            apiKeyCreatedAt={connection.apiKeyCreatedAt}
+            apiKeyLastUsedAt={connection.apiKeyLastUsedAt}
+          />
         </>
       )}
     </Card>
