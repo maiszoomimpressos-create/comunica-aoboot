@@ -180,3 +180,11 @@ export async function listAllConnectionsForAdmin(): Promise<AdminChannelConnecti
     createdAt: c.createdAt,
   }));
 }
+
+/** How many connection requests (any tenant) are still waiting on a
+ * platform admin to provision credentials — drives the notification dot
+ * shown on the "Acessar como colaborador" button and the admin sidebar's
+ * WhatsApp nav item. */
+export function countPendingConnectionsForAdmin(): Promise<number> {
+  return prisma.channelConnection.count({ where: { status: "PENDING" } });
+}

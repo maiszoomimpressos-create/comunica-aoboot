@@ -15,7 +15,7 @@ const ITEMS = [
   { label: "WhatsApp", href: "/admin/whatsapp", icon: MessageCircle },
 ];
 
-export function AdminSidebar() {
+export function AdminSidebar({ pendingWhatsappRequests }: { pendingWhatsappRequests: number }) {
   const pathname = usePathname();
   return (
     <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-sidebar text-sidebar-foreground lg:flex">
@@ -25,6 +25,7 @@ export function AdminSidebar() {
       <nav className="flex-1 space-y-0.5 px-3">
         {ITEMS.map((item) => {
           const active = pathname === item.href || pathname.startsWith(item.href + "/");
+          const badgeCount = item.href === "/admin/whatsapp" ? pendingWhatsappRequests : 0;
           return (
             <Link
               key={item.href}
@@ -38,6 +39,11 @@ export function AdminSidebar() {
             >
               <item.icon className="size-4 shrink-0" />
               {item.label}
+              {badgeCount > 0 && (
+                <span className="ml-auto flex size-5 items-center justify-center rounded-full bg-destructive text-[10px] font-medium text-destructive-foreground">
+                  {badgeCount}
+                </span>
+              )}
             </Link>
           );
         })}

@@ -16,11 +16,13 @@ export function Sidebar({
   permissions,
   memberships,
   isPlatformAdmin,
+  pendingWhatsappRequests,
 }: {
   tenantSlug: string;
   permissions: PermissionCode[];
   memberships: UserMembership[];
   isPlatformAdmin: boolean;
+  pendingWhatsappRequests: number;
 }) {
   const pathname = usePathname();
   const items = NAV_ITEMS.filter((item) => !item.permission || permissions.includes(item.permission));
@@ -61,12 +63,20 @@ export function Sidebar({
         <div className="border-t border-border p-3">
           <Button
             variant="outline"
-            className="w-full justify-start"
+            className="relative w-full justify-start"
             nativeButton={false}
             render={<Link href="/admin" />}
           >
             <ShieldCheck className="size-4" />
             Acessar como colaborador
+            {pendingWhatsappRequests > 0 && (
+              <span
+                className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-destructive text-[10px] font-medium text-destructive-foreground"
+                title={`${pendingWhatsappRequests} pedido(s) de conexão WhatsApp aguardando configuração`}
+              >
+                {pendingWhatsappRequests}
+              </span>
+            )}
           </Button>
         </div>
       )}
