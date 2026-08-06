@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local pre-push verification build output (scripts/build-verify.mjs) —
+    // not "next"-named, so eslint-config-next's own ignore doesn't cover it.
+    ".next-verify/**",
   ]),
 ]);
 

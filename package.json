@@ -8,6 +8,7 @@
     "dev:webpack": "next dev --webpack",
     "build": "next build",
     "build:webpack": "next build --webpack",
+    "build:verify": "node scripts/build-verify.mjs",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
