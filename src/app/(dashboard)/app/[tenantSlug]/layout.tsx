@@ -17,7 +17,12 @@ export default async function TenantLayout({
 
   return (
     <div className="flex min-h-svh">
-      <Sidebar tenantSlug={tenantSlug} permissions={ctx.permissions} memberships={memberships} />
+      <Sidebar
+        tenantSlug={tenantSlug}
+        permissions={ctx.permissions}
+        memberships={memberships}
+        isPlatformAdmin={user.isPlatformAdmin}
+      />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar
           tenantSlug={tenantSlug}

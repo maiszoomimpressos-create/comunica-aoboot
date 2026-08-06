@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NAV_ITEMS } from "./nav-config";
 import { TenantSwitcher } from "./tenant-switcher";
+import { Button } from "@/components/ui/button";
 import type { UserMembership } from "@/repositories/membership.repository";
 import type { PermissionCode } from "@/lib/rbac/permissions";
 import { siteConfig } from "@/config/site";
@@ -13,10 +15,12 @@ export function Sidebar({
   tenantSlug,
   permissions,
   memberships,
+  isPlatformAdmin,
 }: {
   tenantSlug: string;
   permissions: PermissionCode[];
   memberships: UserMembership[];
+  isPlatformAdmin: boolean;
 }) {
   const pathname = usePathname();
   const items = NAV_ITEMS.filter((item) => !item.permission || permissions.includes(item.permission));
@@ -52,6 +56,20 @@ export function Sidebar({
           );
         })}
       </nav>
+
+      {isPlatformAdmin && (
+        <div className="border-t border-border p-3">
+          <Button
+            variant="outline"
+            className="w-full justify-start"
+            nativeButton={false}
+            render={<Link href="/admin" />}
+          >
+            <ShieldCheck className="size-4" />
+            Acessar como colaborador
+          </Button>
+        </div>
+      )}
     </aside>
   );
 }
