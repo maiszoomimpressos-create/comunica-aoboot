@@ -145,9 +145,17 @@ export class ZApiProvider implements WhatsappProvider {
   /** `GET .../contacts/{phone}` — confirmed directly against a real Z-API
    * trial instance. When the number has no name saved in the instance's
    * WhatsApp contacts, Z-API falls back to returning the formatted phone
-   * number itself as `name`/`vname` — we detect and discard that case (by
-   * comparing digits against the queried phone) so a "name" is only ever
-   * used when it's an actual human-set name. */
+   * number itself as `name`/`vname` (e.g. "+55 46 8821-2387") — we detect
+   * and discard that case so a "name" is only ever used when it's an
+   * actual human-set name.
+   *
+   * Deliberately NOT a digit-for-digit comparison against the queried
+   * phone: Z-API's fallback formatting can drop/shift digits (confirmed
+   * against a real instance — a Brazilian mobile number's 9th digit came
+   * back missing from the formatted fallback), so an exact-match check is
+   * unreliable. Instead we treat anything that's *shaped* like a phone
+   * number (only digits, spaces, +, -, parentheses — no letters) as the
+   * fallback, regardless of exact digits. A real name always has letters. */
   async getContactName(
     config: WhatsappConnectionConfig,
     phone: string
@@ -170,8 +178,8 @@ export class ZApiProvider implements WhatsappProvider {
     const name = (data as { name?: string }).name?.trim();
     if (!name) return { ok: false };
 
-    const onlyDigits = (s: string) => s.replace(/\D/g, "");
-    if (onlyDigits(name) === onlyDigits(phone)) {
+    const looksLikePhoneNumber = /^[+\d][\d\s\-()]*$/.test(name);
+    if (looksLikePhoneNumber) {
       // Z-API's own "no name saved" fallback — not a real name.
       return { ok: false };
     }
