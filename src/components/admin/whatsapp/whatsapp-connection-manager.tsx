@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { RevealableInput } from "@/components/ui/revealable-input";
 import { Field, FieldGroup, FieldLabel, FieldDescription } from "@/components/ui/field";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from "@/components/ui/sheet";
 import { provisionWhatsappConnectionAction } from "@/actions/admin/provision-whatsapp-connection";
@@ -140,20 +140,17 @@ export function WhatsappConnectionManager({
               </div>
               <FieldGroup>
                 <Field>
-                  <FieldLabel>URL da instância</FieldLabel>
-                  <Input
+                  <FieldLabel htmlFor="apiUrl">URL da instância</FieldLabel>
+                  <RevealableInput
+                    id="apiUrl"
                     placeholder="https://api.z-api.io/instances/xxxx/token/yyyy"
                     value={apiUrl}
-                    onChange={(e) => setApiUrl(e.target.value)}
+                    onChange={setApiUrl}
                   />
                 </Field>
                 <Field>
-                  <FieldLabel>Token da API</FieldLabel>
-                  <Input
-                    type="password"
-                    value={apiToken}
-                    onChange={(e) => setApiToken(e.target.value)}
-                  />
+                  <FieldLabel htmlFor="apiToken">Token da API</FieldLabel>
+                  <RevealableInput id="apiToken" value={apiToken} onChange={setApiToken} />
                   <FieldDescription>
                     Client-Token de segurança da conta Z-API, se ativado.
                   </FieldDescription>
