@@ -41,6 +41,9 @@ export const auth = betterAuth({
           additionalFields: {
             // Editable by the tenant itself (Minha Empresa / branding).
             primaryColor: { type: "string", required: false },
+            // Editable by the tenant itself (Minha Empresa) — name shown in
+            // automated messages (e.g. WhatsApp purchase confirmation).
+            messageBusinessName: { type: "string", required: false },
             // Only ever changed by platform-admin actions (suspend/cancel),
             // never through the public organization.update API.
             status: {

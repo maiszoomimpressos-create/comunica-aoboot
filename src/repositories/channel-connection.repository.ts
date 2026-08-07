@@ -129,7 +129,10 @@ export function revokeConnectionApiKey(tenantId: string, connectionId: string) {
 export function getConnectionByApiKeyHash(apiKeyHash: string) {
   return prisma.channelConnection.findUnique({
     where: { apiKeyHash },
-    include: { provider: true },
+    include: {
+      provider: true,
+      organization: { select: { name: true, messageBusinessName: true } },
+    },
   });
 }
 

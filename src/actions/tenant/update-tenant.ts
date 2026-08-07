@@ -11,6 +11,7 @@ const schema = z.object({
     .regex(/^#[0-9a-fA-F]{6}$/, "Use um hexadecimal, ex: #6d28d9.")
     .optional()
     .or(z.literal("")),
+  messageBusinessName: z.string().max(80, "Máximo de 80 caracteres.").optional().or(z.literal("")),
 });
 
 export const updateTenantAction = defineTenantAction(
@@ -20,6 +21,7 @@ export const updateTenantAction = defineTenantAction(
     await updateTenant(ctx.tenantId, {
       name: parsed.name,
       primaryColor: parsed.primaryColor || null,
+      messageBusinessName: parsed.messageBusinessName || null,
     });
     return { ok: true };
   }

@@ -1,4 +1,5 @@
 import type {
+  ContactNameResult,
   QrCodeResult,
   SendMessageResult,
   TestConnectionResult,
@@ -35,4 +36,9 @@ export interface WhatsappProvider {
    * the number) to pair the WhatsApp session — a one-time step needed even
    * after credentials are valid; see AWAITING_QR_SCAN. */
   getQrCode(config: WhatsappConnectionConfig): Promise<QrCodeResult>;
+  /** Best-effort lookup of the recipient's own WhatsApp display name, used
+   * to personalize the purchase-confirmation greeting. Never throws and
+   * never blocks a send — a name just isn't included in the greeting when
+   * unavailable. */
+  getContactName(config: WhatsappConnectionConfig, phone: string): Promise<ContactNameResult>;
 }

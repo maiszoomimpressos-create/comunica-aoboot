@@ -42,7 +42,11 @@ export default async function EmpresaPage({
       <EmpresaForm
         tenantSlug={tenantSlug}
         canEdit={canEdit}
-        defaultValues={{ name: tenant.name, primaryColor: tenant.primaryColor ?? "" }}
+        defaultValues={{
+          name: tenant.name,
+          primaryColor: tenant.primaryColor ?? "",
+          messageBusinessName: tenant.messageBusinessName ?? "",
+        }}
       />
     </div>
   );

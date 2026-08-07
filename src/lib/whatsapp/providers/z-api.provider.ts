@@ -1,5 +1,6 @@
 import type { WhatsappProvider } from "../provider";
 import type {
+  ContactNameResult,
   QrCodeResult,
   SendMessageResult,
   TestConnectionResult,
@@ -139,6 +140,43 @@ export class ZApiProvider implements WhatsappProvider {
     }
 
     return { ok: true, image, message: "QR Code disponível.", raw: data };
+  }
+
+  /** `GET .../contacts/{phone}` — confirmed directly against a real Z-API
+   * trial instance. When the number has no name saved in the instance's
+   * WhatsApp contacts, Z-API falls back to returning the formatted phone
+   * number itself as `name`/`vname` — we detect and discard that case (by
+   * comparing digits against the queried phone) so a "name" is only ever
+   * used when it's an actual human-set name. */
+  async getContactName(
+    config: WhatsappConnectionConfig,
+    phone: string
+  ): Promise<ContactNameResult> {
+    const url = `${trimTrailingSlash(config.apiUrl)}/contacts/${phone}`;
+
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(url, {
+        method: "GET",
+        headers: buildHeaders(config.apiToken),
+      });
+    } catch {
+      return { ok: false };
+    }
+
+    const data = await response.json().catch(() => null);
+    if (!response.ok || !data || typeof data !== "object") return { ok: false };
+
+    const name = (data as { name?: string }).name?.trim();
+    if (!name) return { ok: false };
+
+    const onlyDigits = (s: string) => s.replace(/\D/g, "");
+    if (onlyDigits(name) === onlyDigits(phone)) {
+      // Z-API's own "no name saved" fallback — not a real name.
+      return { ok: false };
+    }
+
+    return { ok: true, name };
   }
 
   async sendMessage(

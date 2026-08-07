@@ -7,6 +7,7 @@ export function getTenantById(tenantId: string) {
 export interface UpdateTenantInput {
   name?: string;
   primaryColor?: string | null;
+  messageBusinessName?: string | null;
 }
 
 export function updateTenant(tenantId: string, data: UpdateTenantInput) {

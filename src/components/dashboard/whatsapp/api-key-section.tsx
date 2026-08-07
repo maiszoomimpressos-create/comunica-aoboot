@@ -167,7 +167,7 @@ export function ApiKeySection({
           <pre className="overflow-x-auto rounded-md bg-background p-2 text-foreground">
 {`{
   "to": "5511999999999",
-  "message": "Sua compra foi confirmada!",
+  "buyerName": "Maria Oliveira",
   "qrData": "texto ou código a virar QR code"
 }`}
           </pre>
@@ -176,8 +176,15 @@ export function ApiKeySection({
             código do país + DDD + número (ex: 55 11 999999999 → 5511999999999).
           </p>
           <p className="text-muted-foreground">
-            O QR code é gerado por nós a partir de <code className="text-foreground">qrData</code>{" "}
-            e enviado como imagem junto com a mensagem.
+            <code className="text-foreground">buyerName</code>: o nome do comprador cadastrado no
+            seu sistema — não precisa ser igual ao nome do perfil de WhatsApp de quem recebe.
+          </p>
+          <p className="text-muted-foreground">
+            O texto da mensagem é montado por nós: cumprimenta pelo nome do WhatsApp de quem
+            recebe (quando existir) e sempre cita o nome do comprador e o nome do seu negócio
+            (configurável em Minha Empresa), pra nunca ficar ambíguo quem comprou o quê. O QR code
+            é gerado por nós a partir de <code className="text-foreground">qrData</code> e enviado
+            como imagem junto com a mensagem.
           </p>
         </div>
       )}

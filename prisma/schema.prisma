@@ -120,6 +120,10 @@ model Organization {
   // additionalFields do plugin organization (ver lib/auth/auth.ts)
   primaryColor String?
   status       TenantStatus @default(ACTIVE)
+  // Nome exibido nas mensagens automáticas (ex.: confirmação de compra do
+  // WhatsApp) — pode ser diferente de `name` (ex.: "tipo7.com" em vez da
+  // razão social). Opcional: cai no `name` quando não preenchido.
+  messageBusinessName String?
 
   members       Member[]
   invitations   Invitation[]

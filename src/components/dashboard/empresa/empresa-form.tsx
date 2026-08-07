@@ -17,6 +17,7 @@ const formSchema = z.object({
     .regex(/^#[0-9a-fA-F]{6}$/, "Use um hexadecimal, ex: #6d28d9.")
     .optional()
     .or(z.literal("")),
+  messageBusinessName: z.string().max(80, "Máximo de 80 caracteres.").optional().or(z.literal("")),
 });
 type FormValues = z.infer<typeof formSchema>;
 
@@ -27,7 +28,7 @@ export function EmpresaForm({
 }: {
   tenantSlug: string;
   canEdit: boolean;
-  defaultValues: { name: string; primaryColor: string };
+  defaultValues: { name: string; primaryColor: string; messageBusinessName: string };
 }) {
   const router = useRouter();
   const [serverError, setServerError] = useState<string | null>(null);
@@ -64,6 +65,21 @@ export function EmpresaForm({
           <Input id="primaryColor" placeholder="#6d28d9" disabled={!canEdit} {...register("primaryColor")} />
           <FieldDescription>Usada em elementos de destaque no futuro.</FieldDescription>
           <FieldError errors={[errors.primaryColor]} />
+        </Field>
+
+        <Field data-invalid={!!errors.messageBusinessName}>
+          <FieldLabel htmlFor="messageBusinessName">Nome do negócio nas mensagens</FieldLabel>
+          <Input
+            id="messageBusinessName"
+            placeholder="tipo7.com"
+            disabled={!canEdit}
+            {...register("messageBusinessName")}
+          />
+          <FieldDescription>
+            Como sua empresa aparece nas mensagens automáticas de WhatsApp (ex.: confirmação de
+            compra). Se deixar em branco, usamos o nome da empresa acima.
+          </FieldDescription>
+          <FieldError errors={[errors.messageBusinessName]} />
         </Field>
 
         {serverError && (

@@ -40,3 +40,10 @@ export interface QrCodeResult {
   message: string;
   raw?: unknown;
 }
+
+export interface ContactNameResult {
+  ok: boolean;
+  /** Present only when a real, human-set name was found — never a
+   * formatted-phone-number fallback (see ZApiProvider.getContactName). */
+  name?: string;
+}
