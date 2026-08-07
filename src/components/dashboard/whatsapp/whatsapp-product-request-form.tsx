@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel, FieldError, FieldDescription } from "@/components/ui/field";
 import { WhatsappProductCard } from "./whatsapp-product-card";
 import { WHATSAPP_PRODUCTS } from "@/config/whatsapp-products";
 import { requestWhatsappConnectionAction } from "@/actions/whatsapp/request-connection";
@@ -83,6 +83,10 @@ export function WhatsappProductRequestForm({ tenantSlug }: { tenantSlug: string 
             value={phoneNumber}
             onChange={(e) => setPhoneNumber(e.target.value)}
           />
+          <FieldDescription>
+            Só números, sem espaço, traço ou parênteses: código do país + DDD + número. Exemplo
+            para (11) 99999-9999 → <strong className="text-foreground">5511999999999</strong>.
+          </FieldDescription>
           <FieldError>{error}</FieldError>
         </Field>
       </FieldGroup>

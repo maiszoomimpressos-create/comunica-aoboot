@@ -172,6 +172,10 @@ export function ApiKeySection({
 }`}
           </pre>
           <p className="text-muted-foreground">
+            <code className="text-foreground">to</code>: só números, sem espaço/traço/parênteses —
+            código do país + DDD + número (ex: 55 11 999999999 → 5511999999999).
+          </p>
+          <p className="text-muted-foreground">
             O QR code é gerado por nós a partir de <code className="text-foreground">qrData</code>{" "}
             e enviado como imagem junto com a mensagem.
           </p>

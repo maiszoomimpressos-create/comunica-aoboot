@@ -3,7 +3,9 @@ import { createApiKeyHandler } from "@/lib/api/v1/api-key-handler";
 import { sendPurchaseConfirmation } from "@/services/whatsapp-connection.service";
 
 const bodySchema = z.object({
-  to: z.string().min(8, "Informe o número de destino."),
+  to: z
+    .string()
+    .min(10, "Informe o número no formato DDI + DDD + número, só dígitos (ex: 5511999999999)."),
   message: z.string().min(1, "Informe a mensagem."),
   qrData: z.string().min(1, "Informe o dado a ser codificado no QR code."),
 });

@@ -7,7 +7,7 @@ import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel, FieldError, FieldDescription } from "@/components/ui/field";
 import { sendTestMessageAction } from "@/actions/whatsapp/send-test-message";
 
 const formSchema = z.object({
@@ -49,6 +49,10 @@ export function SendTestMessageForm({
         <Field data-invalid={!!errors.to}>
           <FieldLabel htmlFor={`to-${connectionId}`}>Número de destino</FieldLabel>
           <Input id={`to-${connectionId}`} placeholder="5511999999999" {...register("to")} />
+          <FieldDescription>
+            Só números, sem espaço, traço ou parênteses: código do país + DDD + número. Exemplo
+            para (11) 99999-9999 → <strong className="text-foreground">5511999999999</strong>.
+          </FieldDescription>
           <FieldError errors={[errors.to]} />
         </Field>
         <Field data-invalid={!!errors.message}>
