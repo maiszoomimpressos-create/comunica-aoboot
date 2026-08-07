@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { ConnectionStatusBadge } from "./connection-status-badge";
 import { SendTestMessageForm } from "./send-test-message-form";
 import { ApiKeySection } from "./api-key-section";
+import { QrCodeSection } from "./qr-code-section";
 import { retestWhatsappConnectionAction } from "@/actions/whatsapp/retest-connection";
 import { deleteWhatsappConnectionAction } from "@/actions/whatsapp/delete-connection";
 import type { ChannelConnectionSummary } from "@/repositories/channel-connection.repository";
@@ -47,6 +48,12 @@ export function ConnectionCard({
   // Still just a request — a platform admin hasn't filled in the Z-API
   // credentials yet, so there's nothing to test/send/manage a key for.
   const isConfigured = !!connection.apiUrl;
+  // Credentials are valid, but the WhatsApp session still needs the tenant
+  // to scan a QR code — only they can do that, never the admin.
+  const isAwaitingQrScan = connection.status === "AWAITING_QR_SCAN";
+  // Only once actually paired does it make sense to send messages / manage
+  // an API key for external systems to call.
+  const isFullyConnected = connection.status === "CONNECTED";
 
   async function handleRetest() {
     setRetesting(true);
@@ -92,19 +99,23 @@ export function ConnectionCard({
         </p>
       )}
 
+      {isAwaitingQrScan && (
+        <QrCodeSection tenantSlug={tenantSlug} connectionId={connection.id} />
+      )}
+
       {canManage && (
         <>
           <div className="mt-4 flex flex-wrap items-center gap-2">
+            {isFullyConnected && (
+              <Button variant="outline" size="sm" onClick={() => setShowSend((v) => !v)}>
+                {showSend ? "Fechar" : "Enviar mensagem de teste"}
+              </Button>
+            )}
             {isConfigured && (
-              <>
-                <Button variant="outline" size="sm" onClick={() => setShowSend((v) => !v)}>
-                  {showSend ? "Fechar" : "Enviar mensagem de teste"}
-                </Button>
-                <Button variant="outline" size="sm" onClick={handleRetest} disabled={retesting}>
-                  <RefreshCw className={cn("size-4", retesting && "animate-spin")} />
-                  {retesting ? "Testando…" : "Testar novamente"}
-                </Button>
-              </>
+              <Button variant="outline" size="sm" onClick={handleRetest} disabled={retesting}>
+                <RefreshCw className={cn("size-4", retesting && "animate-spin")} />
+                {retesting ? "Testando…" : isAwaitingQrScan ? "Verificar conexão" : "Testar novamente"}
+              </Button>
             )}
             <AlertDialog>
               <AlertDialogTrigger render={<Button variant="ghost" size="sm" disabled={deleting} />}>
@@ -128,13 +139,13 @@ export function ConnectionCard({
             </AlertDialog>
           </div>
 
-          {showSend && isConfigured && (
+          {showSend && isFullyConnected && (
             <div className="mt-4 border-t border-border pt-4">
               <SendTestMessageForm tenantSlug={tenantSlug} connectionId={connection.id} />
             </div>
           )}
 
-          {isConfigured && (
+          {isFullyConnected && (
             <ApiKeySection
               tenantSlug={tenantSlug}
               connectionId={connection.id}

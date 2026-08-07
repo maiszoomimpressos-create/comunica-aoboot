@@ -14,6 +14,7 @@ export interface WhatsappConnectionConfig {
 
 export type ConnectionTestStatus =
   | "CONNECTED"
+  | "AWAITING_QR_SCAN"
   | "AUTH_ERROR"
   | "UNAVAILABLE"
   | "INVALID_TOKEN"
@@ -28,6 +29,14 @@ export interface TestConnectionResult {
 
 export interface SendMessageResult {
   ok: boolean;
+  message: string;
+  raw?: unknown;
+}
+
+export interface QrCodeResult {
+  ok: boolean;
+  /** `data:image/png;base64,...` data URI, present only when ok. */
+  image?: string;
   message: string;
   raw?: unknown;
 }

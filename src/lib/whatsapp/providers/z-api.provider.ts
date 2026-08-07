@@ -1,5 +1,10 @@
 import type { WhatsappProvider } from "../provider";
-import type { SendMessageResult, TestConnectionResult, WhatsappConnectionConfig } from "../types";
+import type {
+  QrCodeResult,
+  SendMessageResult,
+  TestConnectionResult,
+  WhatsappConnectionConfig,
+} from "../types";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -63,18 +68,22 @@ export class ZApiProvider implements WhatsappProvider {
       };
     }
 
+    const data = await response.json().catch(() => null);
+    const serverMessage =
+      data && typeof data === "object" ? (data as { error?: string }).error : undefined;
+
     if (response.status === 401 || response.status === 403) {
-      return { ok: false, status: "INVALID_TOKEN", message: "Token inválido." };
+      return { ok: false, status: "INVALID_TOKEN", message: serverMessage ?? "Token inválido." };
     }
     if (!response.ok) {
       return {
         ok: false,
         status: "UNAVAILABLE",
-        message: `Instância indisponível (HTTP ${response.status}).`,
+        message: serverMessage ?? `Instância indisponível (HTTP ${response.status}).`,
+        raw: data,
       };
     }
 
-    const data = await response.json().catch(() => null);
     if (!data || typeof data !== "object") {
       return { ok: false, status: "ERROR", message: "Resposta inesperada da instância.", raw: data };
     }
@@ -83,13 +92,53 @@ export class ZApiProvider implements WhatsappProvider {
       return { ok: true, status: "CONNECTED", message: "Conectado com sucesso.", raw: data };
     }
 
+    // Z-API returns 200 + connected:false for exactly one situation: the
+    // instance/credentials are valid but the WhatsApp session hasn't been
+    // paired to a phone yet (confirmed against the docs' "disconnected" /
+    // "needs session restore" examples — both are this same case from our
+    // side, the fix is always "scan the QR code").
     return {
       ok: false,
-      status: "AUTH_ERROR",
+      status: "AWAITING_QR_SCAN",
       message:
         (data as { error?: string }).error ?? "O WhatsApp ainda não está pareado com esta instância.",
       raw: data,
     };
+  }
+
+  /** `{ value: "data:image/png;base64,..." }` — confirmed directly against
+   * a real Z-API trial instance (GET .../qr-code/image); the sibling
+   * `.../qr-code` endpoint returns a wa.me linked-device deep link instead
+   * of an image, not what we want here. */
+  async getQrCode(config: WhatsappConnectionConfig): Promise<QrCodeResult> {
+    const url = `${trimTrailingSlash(config.apiUrl)}/qr-code/image`;
+
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(url, {
+        method: "GET",
+        headers: buildHeaders(config.apiToken),
+      });
+    } catch {
+      return { ok: false, message: "Não foi possível buscar o QR Code da instância." };
+    }
+
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          (data as { error?: string } | null)?.error ?? `Erro ao buscar QR Code (HTTP ${response.status}).`,
+        raw: data,
+      };
+    }
+
+    const image = (data as { value?: string } | null)?.value;
+    if (!image || !image.startsWith("data:image")) {
+      return { ok: false, message: "A instância não retornou um QR Code válido.", raw: data };
+    }
+
+    return { ok: true, image, message: "QR Code disponível.", raw: data };
   }
 
   async sendMessage(

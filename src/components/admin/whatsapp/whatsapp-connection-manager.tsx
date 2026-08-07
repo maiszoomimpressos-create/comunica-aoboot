@@ -21,6 +21,7 @@ import type { AdminChannelConnectionRow } from "@/repositories/channel-connectio
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   PENDING: "secondary",
   CONNECTING: "outline",
+  AWAITING_QR_SCAN: "outline",
   CONNECTED: "default",
   AUTH_ERROR: "destructive",
   UNAVAILABLE: "destructive",
@@ -31,6 +32,7 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
 const STATUS_LABEL: Record<string, string> = {
   PENDING: "Pendente",
   CONNECTING: "Conectando",
+  AWAITING_QR_SCAN: "Aguardando QR Code",
   CONNECTED: "Conectado",
   AUTH_ERROR: "Erro de autenticação",
   UNAVAILABLE: "Instância indisponível",

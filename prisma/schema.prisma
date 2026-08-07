@@ -334,6 +334,12 @@ enum CommunicationChannelType {
 enum ChannelConnectionStatus {
   PENDING
   CONNECTING
+  // Credentials are valid (instance reachable, Client-Token accepted) but
+  // the WhatsApp session itself hasn't been paired to a phone yet — the
+  // tenant (whoever has the phone) needs to scan the QR code. Distinct
+  // from AUTH_ERROR, which is a real problem; this is an expected,
+  // temporary step in normal setup.
+  AWAITING_QR_SCAN
   CONNECTED
   AUTH_ERROR
   UNAVAILABLE

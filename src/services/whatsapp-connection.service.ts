@@ -5,6 +5,7 @@ import { generateApiKey, hashApiKey } from "@/lib/whatsapp/api-key";
 import { getWhatsappProvider } from "@/lib/whatsapp/registry";
 import { WHATSAPP_PRODUCTS } from "@/config/whatsapp-products";
 import type {
+  QrCodeResult,
   SendMessageResult,
   TestConnectionResult,
   WhatsappConnectionConfig,
@@ -90,13 +91,27 @@ export interface ProvisionConnectionInput {
   apiToken: string;
 }
 
+/** Statuses that mean "credentials are actually good" — either fully
+ * paired already, or just waiting on the tenant to scan the QR code (which
+ * still proves the instance/Client-Token are valid). Anything else
+ * (INVALID_TOKEN, UNAVAILABLE, ERROR, AUTH_ERROR) means the credentials
+ * themselves are wrong and nothing should be persisted. */
+function isProvisionable(
+  status: TestConnectionResult["status"]
+): status is "CONNECTED" | "AWAITING_QR_SCAN" {
+  return status === "CONNECTED" || status === "AWAITING_QR_SCAN";
+}
+
 /**
  * Admin-facing: fills in the real Z-API credentials for an existing
  * PENDING connection request. Re-validates server-side before persisting
  * (never trusts anything blindly) and marks the WhatsApp module INSTALLED
- * for that tenant on success, all in one transaction. Throws (without
- * writing anything) if the test fails — the connection stays PENDING so
- * the admin can just fix the credentials and try again.
+ * for that tenant as soon as the credentials check out — even if the
+ * WhatsApp session itself still needs the tenant to scan a QR code (see
+ * AWAITING_QR_SCAN / getConnectionQrCode), since that step can only be
+ * done by whoever has the phone, never by the admin provisioning this.
+ * Throws (without writing anything) if the credentials themselves are bad
+ * — the connection stays PENDING so the admin can fix and retry.
  */
 export async function provisionConnection(
   tenantId: string,
@@ -113,7 +128,7 @@ export async function provisionConnection(
     phoneNumber: connection.phoneNumber,
   });
 
-  if (!testResult.ok) {
+  if (!isProvisionable(testResult.status)) {
     throw new ValidationError(testResult.message, { status: testResult.status });
   }
 
@@ -125,9 +140,9 @@ export async function provisionConnection(
       data: {
         apiUrl: input.apiUrl,
         apiTokenCipher,
-        status: "CONNECTED",
+        status: testResult.status,
         lastValidation: new Date(),
-        lastError: null,
+        lastError: testResult.ok ? null : testResult.message,
       },
     });
 
@@ -149,6 +164,27 @@ export async function provisionConnection(
   const summary = await getConnectionSummary(tenantId, connectionId);
   if (!summary) throw new NotFoundError("Conexão provisionada, mas não encontrada ao recarregar.");
   return summary;
+}
+
+/** Fetches the QR code the tenant scans (with the phone that owns the
+ * number) to finish pairing — only meaningful once credentials are set. */
+export async function getConnectionQrCode(
+  tenantId: string,
+  connectionId: string
+): Promise<QrCodeResult> {
+  const connection = await getConnectionWithSecret(tenantId, connectionId);
+  if (!connection) throw new NotFoundError("Conexão não encontrada.");
+  if (!connection.apiUrl || !connection.apiTokenCipher) {
+    throw new ConflictError("Esta conexão ainda não foi configurada.");
+  }
+
+  const apiToken = decryptSecret(connection.apiTokenCipher);
+  const provider = getWhatsappProvider(connection.provider.key);
+  return provider.getQrCode({
+    apiUrl: connection.apiUrl,
+    apiToken,
+    phoneNumber: connection.phoneNumber,
+  });
 }
 
 export async function sendTestMessage(

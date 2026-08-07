@@ -1,4 +1,9 @@
-import type { SendMessageResult, TestConnectionResult, WhatsappConnectionConfig } from "./types";
+import type {
+  QrCodeResult,
+  SendMessageResult,
+  TestConnectionResult,
+  WhatsappConnectionConfig,
+} from "./types";
 
 /**
  * Contract every WhatsApp provider (Z-API today; Meta Cloud API, Evolution
@@ -26,4 +31,8 @@ export interface WhatsappProvider {
     image: string,
     caption?: string
   ): Promise<SendMessageResult>;
+  /** Fetches the QR code the account owner scans (with the phone that owns
+   * the number) to pair the WhatsApp session — a one-time step needed even
+   * after credentials are valid; see AWAITING_QR_SCAN. */
+  getQrCode(config: WhatsappConnectionConfig): Promise<QrCodeResult>;
 }
