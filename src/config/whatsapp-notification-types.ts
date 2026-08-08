@@ -77,9 +77,14 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     key: "estacionamento_emitido",
     label: "Comprovante de estacionamento emitido",
     requiresQr: true,
-    requiredDetailKeys: [],
-    buildMessage: ({ whatsappName, recipientName, businessName }) =>
-      `${greet(whatsappName)} Seu comprovante de estacionamento em ${businessName}, por ${bold(recipientName)}, foi aprovado com sucesso.`,
+    // `local`: nome/endereço do estacionamento. `placa`/`cor`/`modelo`: do
+    // veículo. `data`/`horario`: mesmos nomes de ingresso_emitido e
+    // agendamento_confirmado, por consistência. Serve os 3 momentos de
+    // venda (junto com o ingresso, depois pelo site, ou avulso na hora do
+    // portão) — mesma estrutura de dados nos três, só muda quem dispara.
+    requiredDetailKeys: ["local", "placa", "cor", "modelo", "data", "horario"],
+    buildMessage: ({ whatsappName, recipientName, details }) =>
+      `${greet(whatsappName)}\n\nSeu comprovante de estacionamento em ${bold(details.local)} foi aprovado com sucesso.\n\n🚗 ${details.modelo} - ${details.cor} - Placa ${details.placa}\n📅 ${details.data} às ${details.horario}\n\nComprado por: ${bold(recipientName)}`,
   },
   {
     key: "lista_espera",
