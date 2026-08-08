@@ -41,8 +41,14 @@ export interface NotificationTypeDef {
   buildMessage(input: BuildMessageInput): string;
 }
 
+// WhatsApp renders *text* as bold client-side — no special API support
+// needed, just send the asterisks as part of the plain text.
+function bold(text: string): string {
+  return `*${text}*`;
+}
+
 function greet(whatsappName: string | null): string {
-  return whatsappName ? `Olá, ${whatsappName}!` : "Olá!";
+  return whatsappName ? `Olá, ${bold(whatsappName)}!` : "Olá!";
 }
 
 export const DEFAULT_NOTIFICATION_TYPE = "compra_confirmada";
@@ -54,15 +60,18 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     requiresQr: false,
     requiredDetailKeys: [],
     buildMessage: ({ whatsappName, recipientName, businessName }) =>
-      `${greet(whatsappName)} O pedido comprado em ${businessName}, por ${recipientName}, foi aprovado com sucesso.`,
+      `${greet(whatsappName)} O pedido comprado em ${businessName}, por ${bold(recipientName)}, foi aprovado com sucesso.`,
   },
   {
     key: "ingresso_emitido",
     label: "Ingresso emitido",
     requiresQr: true,
-    requiredDetailKeys: [],
-    buildMessage: ({ whatsappName, recipientName, businessName }) =>
-      `${greet(whatsappName)} Seu ingresso da compra em ${businessName}, por ${recipientName}, foi aprovado com sucesso.`,
+    // `evento`: nome do show/evento. `data`/`horario`: mesmos nomes de
+    // agendamento_confirmado, por consistência. `local`: endereço do
+    // evento — todos aparecem na mensagem, junto com a imagem do QR code.
+    requiredDetailKeys: ["evento", "data", "horario", "local"],
+    buildMessage: ({ whatsappName, recipientName, businessName, details }) =>
+      `${greet(whatsappName)}\n\nSeu ingresso para ${bold(details.evento)} em ${businessName} foi aprovado com sucesso.\n\n📅 ${details.data} às ${details.horario}\n📍 ${details.local}\n\nComprado por: ${bold(recipientName)}`,
   },
   {
     key: "estacionamento_emitido",
@@ -70,7 +79,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     requiresQr: true,
     requiredDetailKeys: [],
     buildMessage: ({ whatsappName, recipientName, businessName }) =>
-      `${greet(whatsappName)} Seu comprovante de estacionamento em ${businessName}, por ${recipientName}, foi aprovado com sucesso.`,
+      `${greet(whatsappName)} Seu comprovante de estacionamento em ${businessName}, por ${bold(recipientName)}, foi aprovado com sucesso.`,
   },
   {
     key: "lista_espera",
