@@ -51,6 +51,40 @@ function greet(whatsappName: string | null): string {
   return whatsappName ? `Olá, ${bold(whatsappName)}!` : "Olá!";
 }
 
+/** `isoDate` is UTC (ISO 8601, e.g. "2026-12-15T22:00:00.000Z") — converted
+ * here to America/Sao_Paulo for display, since the caller (tipo7) sends it
+ * raw in UTC and expects us to handle the timezone conversion. Returns
+ * null for empty/invalid input so callers can skip the line entirely
+ * instead of showing a broken date. */
+function formatEventDateTime(isoDate: string | undefined): string | null {
+  if (!isoDate?.trim()) return null;
+  const date = new Date(isoDate);
+  if (Number.isNaN(date.getTime())) return null;
+  const datePart = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
+  const timePart = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+  return `${datePart} às ${timePart}`;
+}
+
+/** `local`/`cidade`/`estado` are all optional (tipo7's contract: may come
+ * as "") — combines whichever are present into one line, or null if none
+ * are. */
+function formatLocation(details: NotificationDetails): string | null {
+  const parts: string[] = [];
+  if (details.local?.trim()) parts.push(details.local.trim());
+  const cityState = [details.cidade?.trim(), details.estado?.trim()].filter(Boolean).join("/");
+  if (cityState) parts.push(cityState);
+  return parts.length > 0 ? parts.join(" - ") : null;
+}
+
 export const DEFAULT_NOTIFICATION_TYPE = "compra_confirmada";
 
 export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
@@ -66,12 +100,27 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     key: "ingresso_emitido",
     label: "Ingresso emitido",
     requiresQr: true,
-    // `evento`: nome do show/evento. `data`/`horario`: mesmos nomes de
-    // agendamento_confirmado, por consistência. `local`: endereço do
-    // evento — todos aparecem na mensagem, junto com a imagem do QR code.
-    requiredDetailKeys: ["evento", "data", "horario", "local"],
-    buildMessage: ({ whatsappName, recipientName, businessName, details }) =>
-      `${greet(whatsappName)}\n\nSeu ingresso para ${bold(details.evento)} em ${businessName} foi aprovado com sucesso.\n\n📅 ${details.data} às ${details.horario}\n📍 ${details.local}\n\nComprado por: ${bold(recipientName)}`,
+    // Contrato definido pelo lado da Tipo7 (em produção desde 08/08/2026):
+    // `nome_evento` e `ingresso` (tipo do ingresso — Pista/VIP/etc, sempre
+    // singular já que cada chamada é 1 ingresso só) sempre vêm
+    // preenchidos; `data` (ISO 8601 UTC), `local`, `cidade`, `estado`
+    // podem vir "" — tratados como opcionais na mensagem (a linha
+    // correspondente some quando vêm vazios, ver formatEventDateTime /
+    // formatLocation).
+    requiredDetailKeys: ["nome_evento", "ingresso"],
+    buildMessage: ({ whatsappName, recipientName, businessName, details }) => {
+      const lines = [
+        greet(whatsappName),
+        "",
+        `Seu ingresso ${bold(details.ingresso)} para ${bold(details.nome_evento)} em ${businessName} foi aprovado com sucesso.`,
+      ];
+      const when = formatEventDateTime(details.data);
+      if (when) lines.push(`📅 ${when}`);
+      const where = formatLocation(details);
+      if (where) lines.push(`📍 ${where}`);
+      lines.push("", `Comprado por: ${bold(recipientName)}`);
+      return lines.join("\n");
+    },
   },
   {
     key: "estacionamento_emitido",
@@ -85,6 +134,19 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     requiredDetailKeys: ["local", "placa", "cor", "modelo", "data", "horario"],
     buildMessage: ({ whatsappName, recipientName, details }) =>
       `${greet(whatsappName)}\n\nSeu comprovante de estacionamento em ${bold(details.local)} foi aprovado com sucesso.\n\n🚗 ${details.modelo} - ${details.cor} - Placa ${details.placa}\n📅 ${details.data} às ${details.horario}\n\nComprado por: ${bold(recipientName)}`,
+  },
+  {
+    key: "estacionamento_liberado",
+    label: "Entrada no estacionamento liberada (ticket de saída)",
+    requiresQr: true,
+    // Disparado no momento em que o carro efetivamente entra — seja depois
+    // de validar um estacionamento_emitido comprado antes, seja por
+    // pagamento na hora do portão. O qrData aqui é um código NOVO,
+    // diferente do da compra: é o que libera a SAÍDA do veículo depois,
+    // não a entrada.
+    requiredDetailKeys: ["local", "placa", "cor", "modelo", "horario"],
+    buildMessage: ({ whatsappName, details }) =>
+      `${greet(whatsappName)}\n\nSeu veículo ${bold(`${details.modelo} - ${details.cor} - Placa ${details.placa}`)} entrou no estacionamento ${bold(details.local)} às ${details.horario}.\n\nGuarde este QR code — você vai precisar apresentá-lo na saída para liberar o veículo.`,
   },
   {
     key: "lista_espera",
