@@ -274,6 +274,13 @@ export interface PurchaseConfirmationInput {
    * vouchers — anything meant to be scanned); optional otherwise, in which
    * case the message is sent as plain text instead of a captioned image. */
   qrData?: string;
+  /** Optional free-text line the caller can add on top of the templated
+   * message (e.g. "Apresente esse ingresso na portaria do evento, não
+   * perca") — appended as its own paragraph, after everything the catalog
+   * template builds. Unlike every other field, this one *is* raw text
+   * from the caller — deliberately opt-in and additive, never a
+   * replacement for the structured template. */
+  note?: string;
 }
 
 /**
@@ -323,12 +330,13 @@ export async function sendPurchaseConfirmation(
   // means the greeting comes out generic ("Olá!").
   const contactName = await provider.getContactName(config, input.to).catch(() => ({ ok: false as const }));
 
-  const message = notificationType.buildMessage({
+  const baseMessage = notificationType.buildMessage({
     whatsappName: contactName.ok ? contactName.name ?? null : null,
     recipientName: input.recipientName,
     businessName: connection.organization.messageBusinessName || connection.organization.name,
     details,
   });
+  const message = input.note?.trim() ? `${baseMessage}\n\n${input.note.trim()}` : baseMessage;
 
   if (input.qrData) {
     const qrImage = await QRCode.toDataURL(input.qrData);

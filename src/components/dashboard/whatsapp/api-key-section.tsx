@@ -199,11 +199,17 @@ export function ApiKeySection({
             ))}
           </ul>
           <p className="text-muted-foreground">
-            O texto da mensagem é sempre montado por nós — nunca texto livre: cumprimenta pelo
+            O texto da mensagem é sempre montado por nós a partir do <code className="text-foreground">type</code>: cumprimenta pelo
             nome do WhatsApp de quem recebe (quando existir) e sempre cita{" "}
             <code className="text-foreground">recipientName</code> e o nome do seu negócio
             (configurável em Minha Empresa). Quando <code className="text-foreground">qrData</code>{" "}
             é enviado, geramos o QR code e mandamos como imagem; sem ele, vai como texto.
+          </p>
+          <p className="text-muted-foreground">
+            <code className="text-foreground">note</code> (opcional, até 500 caracteres): uma
+            linha de texto livre sua, adicionada no final da mensagem — ex: &ldquo;Apresente esse
+            ingresso na portaria do evento, não perca&rdquo;. Complementa, nunca substitui o texto
+            montado por nós.
           </p>
         </div>
       )}
