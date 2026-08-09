@@ -20,6 +20,7 @@ import {
   setConnectionApiKey,
   revokeConnectionApiKey,
   touchApiKeyLastUsed,
+  updateConnectionMeta,
   updateConnectionStatus,
   type ChannelConnectionSummary,
 } from "@/repositories/channel-connection.repository";
@@ -84,6 +85,35 @@ export async function requestConnection(
 
   const summary = await getConnectionSummary(tenantId, connection.id);
   if (!summary) throw new NotFoundError("Solicitação criada, mas não encontrada ao recarregar.");
+  return summary;
+}
+
+export interface UpdateConnectionMetaInput {
+  connectionName: string;
+  phoneNumber: string;
+}
+
+/** Tenant-facing: renames the connection and/or corrects the phone number
+ * shown for it. Deliberately does NOT touch apiUrl/apiTokenCipher — those
+ * are provisioned only by a platform admin (see provisionConnection); if
+ * the credentials themselves are wrong, the fix is a new connection
+ * request, not an edit. */
+export async function updateConnectionMetadata(
+  tenantId: string,
+  connectionId: string,
+  input: UpdateConnectionMetaInput
+): Promise<ChannelConnectionSummary> {
+  if (!input.connectionName.trim()) throw new ValidationError("Informe o nome da conexão.");
+  if (!input.phoneNumber.trim()) throw new ValidationError("Informe o número do WhatsApp.");
+
+  const result = await updateConnectionMeta(tenantId, connectionId, {
+    connectionName: input.connectionName.trim(),
+    phoneNumber: input.phoneNumber.trim(),
+  });
+  if (result.count === 0) throw new NotFoundError("Conexão não encontrada.");
+
+  const summary = await getConnectionSummary(tenantId, connectionId);
+  if (!summary) throw new NotFoundError("Conexão atualizada, mas não encontrada ao recarregar.");
   return summary;
 }
 

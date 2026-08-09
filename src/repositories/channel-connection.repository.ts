@@ -88,6 +88,19 @@ export function createPendingConnection(input: CreatePendingConnectionInput) {
   return prisma.channelConnection.create({ data: input });
 }
 
+/** Tenant-editable metadata — never touches credentials (apiUrl/token),
+ * which only a platform admin can set via provisionConnection. */
+export function updateConnectionMeta(
+  tenantId: string,
+  connectionId: string,
+  data: { connectionName: string; phoneNumber: string }
+) {
+  return prisma.channelConnection.updateMany({
+    where: { id: connectionId, tenantId },
+    data,
+  });
+}
+
 export function updateConnectionStatus(
   tenantId: string,
   connectionId: string,

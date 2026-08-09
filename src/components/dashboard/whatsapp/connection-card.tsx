@@ -21,6 +21,7 @@ import { ConnectionStatusBadge } from "./connection-status-badge";
 import { SendTestMessageForm } from "./send-test-message-form";
 import { ApiKeySection } from "./api-key-section";
 import { QrCodeSection } from "./qr-code-section";
+import { EditConnectionDialog } from "./edit-connection-dialog";
 import { retestWhatsappConnectionAction } from "@/actions/whatsapp/retest-connection";
 import { deleteWhatsappConnectionAction } from "@/actions/whatsapp/delete-connection";
 import type { ChannelConnectionSummary } from "@/repositories/channel-connection.repository";
@@ -117,6 +118,14 @@ export function ConnectionCard({
                 {retesting ? "Testando…" : isAwaitingQrScan ? "Verificar conexão" : "Testar novamente"}
               </Button>
             )}
+            <EditConnectionDialog
+              tenantSlug={tenantSlug}
+              connectionId={connection.id}
+              defaultValues={{
+                connectionName: connection.connectionName,
+                phoneNumber: connection.phoneNumber,
+              }}
+            />
             <AlertDialog>
               <AlertDialogTrigger render={<Button variant="ghost" size="sm" disabled={deleting} />}>
                 <Trash2 className="size-4" />
