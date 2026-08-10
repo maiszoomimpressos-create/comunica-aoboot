@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db/prisma";
 import type { ChannelConnectionStatus, CommunicationChannelType } from "@/generated/prisma/client";
+import type { Prisma } from "@/generated/prisma/client";
 
 export interface ChannelConnectionSummary {
   id: string;
@@ -153,6 +154,43 @@ export function touchApiKeyLastUsed(connectionId: string) {
   return prisma.channelConnection.update({
     where: { id: connectionId },
     data: { apiKeyLastUsedAt: new Date() },
+  });
+}
+
+// --- Webhooks (inbound, from the provider) ----------------------------------
+
+/** Resolves a connection purely by id + its webhook secret — deliberately
+ * NOT tenant-scoped, since a webhook call from Z-API carries neither a
+ * session nor our API key, only whatever we embedded in the URL we gave
+ * Z-API to call (see app/api/webhooks/zapi/[connectionId]/route.ts). */
+export function getConnectionForWebhook(connectionId: string) {
+  return prisma.channelConnection.findUnique({
+    where: { id: connectionId },
+    select: { id: true, webhookSecret: true, provider: { select: { key: true } } },
+  });
+}
+
+export function setWebhookSecret(tenantId: string, connectionId: string, secret: string) {
+  return prisma.channelConnection.updateMany({
+    where: { id: connectionId, tenantId },
+    data: { webhookSecret: secret },
+  });
+}
+
+export function createWebhookEvent(connectionId: string, source: string, payload: unknown) {
+  return prisma.webhookEvent.create({
+    data: { connectionId, source, payload: payload as Prisma.InputJsonValue },
+  });
+}
+
+/** For inspecting what's landed so far — no UI yet, used directly (Prisma
+ * Studio, a one-off script) until a concrete feature reads these for
+ * something end-user-facing. */
+export function listRecentWebhookEvents(connectionId: string, limit = 20) {
+  return prisma.webhookEvent.findMany({
+    where: { connectionId },
+    orderBy: { receivedAt: "desc" },
+    take: limit,
   });
 }
 

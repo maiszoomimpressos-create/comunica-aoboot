@@ -2,6 +2,7 @@ import QRCode from "qrcode";
 import { prisma } from "@/lib/db/prisma";
 import { encryptSecret, decryptSecret } from "@/lib/crypto/secret-box";
 import { generateApiKey, hashApiKey } from "@/lib/whatsapp/api-key";
+import { generateWebhookSecret } from "@/lib/whatsapp/webhook-secret";
 import { getWhatsappProvider } from "@/lib/whatsapp/registry";
 import { WHATSAPP_PRODUCTS } from "@/config/whatsapp-products";
 import { getNotificationType, type NotificationDetails } from "@/config/whatsapp-notification-types";
@@ -14,10 +15,12 @@ import type {
 import {
   ensureChannel,
   createPendingConnection,
+  createWebhookEvent,
   getConnectionSummary,
   getConnectionWithSecret,
   getConnectionByApiKeyHash,
   setConnectionApiKey,
+  setWebhookSecret,
   revokeConnectionApiKey,
   touchApiKeyLastUsed,
   updateConnectionMeta,
@@ -286,6 +289,38 @@ export async function revokeApiKey(tenantId: string, connectionId: string): Prom
   const connection = await getConnectionSummary(tenantId, connectionId);
   if (!connection) throw new NotFoundError("Conexão não encontrada.");
   await revokeConnectionApiKey(tenantId, connectionId);
+}
+
+// --- Webhooks (inbound, from the provider) ----------------------------------
+
+/** Generates the connection's webhook secret the first time it's needed
+ * (idempotent — returns the existing one on later calls instead of
+ * rotating it, since rotating would require re-registering the URL with
+ * the provider every time). Returns the full URL to register in the
+ * provider's dashboard/API, secret embedded as a query param. */
+export async function ensureWebhookUrl(tenantId: string, connectionId: string): Promise<string> {
+  const connection = await getConnectionWithSecret(tenantId, connectionId);
+  if (!connection) throw new NotFoundError("Conexão não encontrada.");
+
+  let secret = connection.webhookSecret;
+  if (!secret) {
+    secret = generateWebhookSecret();
+    await setWebhookSecret(tenantId, connectionId, secret);
+  }
+
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (!baseUrl) throw new ConflictError("NEXT_PUBLIC_APP_URL não configurada.");
+  return `${baseUrl}/api/webhooks/zapi/${connectionId}?secret=${secret}`;
+}
+
+/** Called by the public webhook route after verifying the secret — just
+ * persists the raw payload for now (see WebhookEvent's schema comment:
+ * interpreting these is future work, this only builds the log they'll be
+ * read from). Never throws on a malformed/unexpected payload shape — a
+ * webhook endpoint must always ack fast, so any parsing lives downstream
+ * of this, not here. */
+export async function recordWebhookEvent(connectionId: string, payload: unknown): Promise<void> {
+  await createWebhookEvent(connectionId, "z-api", payload);
 }
 
 export interface PurchaseConfirmationInput {

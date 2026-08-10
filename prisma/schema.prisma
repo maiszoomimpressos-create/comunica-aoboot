@@ -403,6 +403,12 @@ model ChannelConnection {
   apiKeyCreatedAt  DateTime?
   apiKeyLastUsedAt DateTime?
 
+  // Segredo próprio pra autenticar webhooks recebidos da Z-API (ver
+  // app/api/webhooks/zapi/[connectionId]/route.ts) — gerado sob demanda,
+  // nunca reaproveita a chave de API pública (superfícies diferentes:
+  // uma autentica quem nos chama, a outra autentica quem a Z-API chama).
+  webhookSecret String?
+
   tenantId     String
   organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -412,8 +418,28 @@ model ChannelConnection {
   providerId String
   provider   ChannelProvider @relation(fields: [providerId], references: [id])
 
+  webhookEvents WebhookEvent[]
+
   @@index([tenantId, channelId])
   @@map("channel_connection")
+}
+
+// Log bruto dos eventos recebidos via webhook (mensagem recebida, status de
+// entrega/leitura, conexão/desconexão, ...) — guardado sem interpretar o
+// formato ainda; a leitura/uso desses dados é trabalho futuro (ver plano).
+model WebhookEvent {
+  id           String   @id @default(cuid())
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  // "z-api" hoje — mesmo valor de ChannelProvider.key, deixa espaço pra
+  // outros provedores mais pra frente sem mudar o formato da tabela.
+  source  String
+  payload Json
+  receivedAt DateTime @default(now())
+
+  @@index([connectionId, receivedAt])
+  @@map("webhook_event")
 }
 
 // =====================================================================
