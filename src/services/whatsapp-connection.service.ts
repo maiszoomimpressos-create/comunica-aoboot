@@ -25,6 +25,7 @@ import {
   touchApiKeyLastUsed,
   updateConnectionMeta,
   updateConnectionStatus,
+  updateConnectionStatusById,
   type ChannelConnectionSummary,
 } from "@/repositories/channel-connection.repository";
 import { getProviderByKey } from "@/repositories/channel-provider.repository";
@@ -313,14 +314,61 @@ export async function ensureWebhookUrl(tenantId: string, connectionId: string): 
   return `${baseUrl}/api/webhooks/zapi/${connectionId}?secret=${secret}`;
 }
 
-/** Called by the public webhook route after verifying the secret — just
- * persists the raw payload for now (see WebhookEvent's schema comment:
- * interpreting these is future work, this only builds the log they'll be
- * read from). Never throws on a malformed/unexpected payload shape — a
- * webhook endpoint must always ack fast, so any parsing lives downstream
- * of this, not here. */
+/** Z-API's own event-name convention, confirmed for real against the
+ * trial instance for "MessageStatusCallback" (see WebhookEvent rows).
+ * "ConnectedCallback"/"DisconnectedCallback" follow the same naming
+ * pattern but are NOT yet confirmed against a real event — forcing a real
+ * disconnect just to verify would mean actually unpairing the production
+ * WhatsApp session, too disruptive to do just for this. If the real
+ * webhook turns out to use a different type string, this silently does
+ * nothing (the raw payload is still logged either way) until corrected. */
+const CONNECTED_EVENT_TYPE = "ConnectedCallback";
+const DISCONNECTED_EVENT_TYPE = "DisconnectedCallback";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** Flips the connection's status in near-real-time when Z-API tells us the
+ * WhatsApp session connected/disconnected — instead of only finding out
+ * whenever a human happens to click "Testar novamente". Deliberately
+ * separate from testConnection/retestConnection's HTTP-poll path; this is
+ * push-driven. AWAITING_QR_SCAN (not ERROR/UNAVAILABLE) on disconnect,
+ * since re-pairing via QR code is the actual fix, not a broken credential. */
+async function applyConnectionStatusFromWebhook(
+  connectionId: string,
+  payload: unknown
+): Promise<void> {
+  if (!isRecord(payload)) return;
+  const type = payload.type;
+
+  if (type === CONNECTED_EVENT_TYPE) {
+    await updateConnectionStatusById(connectionId, {
+      status: "CONNECTED",
+      lastValidation: new Date(),
+      lastError: null,
+    });
+  } else if (type === DISCONNECTED_EVENT_TYPE) {
+    await updateConnectionStatusById(connectionId, {
+      status: "AWAITING_QR_SCAN",
+      lastValidation: new Date(),
+      lastError: "Sessão desconectada — detectado via webhook, escaneie o QR code novamente.",
+    });
+  }
+}
+
+/** Called by the public webhook route after verifying the secret. Always
+ * persists the raw payload first (see WebhookEvent's schema comment:
+ * interpreting these is still mostly future work, this is the log
+ * everything else reads from) — connection-status events are the one
+ * exception acted on directly, see applyConnectionStatusFromWebhook.
+ * Never throws on a malformed/unexpected payload shape — a webhook
+ * endpoint must always ack fast. */
 export async function recordWebhookEvent(connectionId: string, payload: unknown): Promise<void> {
   await createWebhookEvent(connectionId, "z-api", payload);
+  await applyConnectionStatusFromWebhook(connectionId, payload).catch((err) => {
+    console.error("Failed to apply connection status from webhook:", err);
+  });
 }
 
 export interface PurchaseConfirmationInput {

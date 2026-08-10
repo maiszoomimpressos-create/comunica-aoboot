@@ -170,6 +170,17 @@ export function getConnectionForWebhook(connectionId: string) {
   });
 }
 
+/** Same shape as updateConnectionStatus but keyed only by connectionId —
+ * used from the webhook path, which (unlike every tenant-facing action)
+ * has no tenantId to scope by; getConnectionForWebhook already proved the
+ * connectionId is real via the secret check before this is ever called. */
+export function updateConnectionStatusById(
+  connectionId: string,
+  data: { status: ChannelConnectionStatus; lastValidation: Date | null; lastError: string | null }
+) {
+  return prisma.channelConnection.update({ where: { id: connectionId }, data });
+}
+
 export function setWebhookSecret(tenantId: string, connectionId: string, secret: string) {
   return prisma.channelConnection.updateMany({
     where: { id: connectionId, tenantId },
