@@ -6,6 +6,7 @@ import { generateWebhookSecret } from "@/lib/whatsapp/webhook-secret";
 import { getWhatsappProvider } from "@/lib/whatsapp/registry";
 import { WHATSAPP_PRODUCTS } from "@/config/whatsapp-products";
 import { getNotificationType, type NotificationDetails } from "@/config/whatsapp-notification-types";
+import { isValidServiceKey } from "@/config/whatsapp-services";
 import type {
   QrCodeResult,
   SendMessageResult,
@@ -23,14 +24,17 @@ import {
   setWebhookSecret,
   revokeConnectionApiKey,
   touchApiKeyLastUsed,
+  updateBalanceAlertPhones,
   updateConnectionMeta,
   updateConnectionStatus,
+  updateEnabledServices,
   updateConnectionStatusById,
   type ChannelConnectionSummary,
 } from "@/repositories/channel-connection.repository";
 import { getProviderByKey } from "@/repositories/channel-provider.repository";
 import {
   ConflictError,
+  ForbiddenError,
   NotFoundError,
   UnauthorizedError,
   ValidationError,
@@ -114,6 +118,62 @@ export async function updateConnectionMetadata(
     connectionName: input.connectionName.trim(),
     phoneNumber: input.phoneNumber.trim(),
   });
+  if (result.count === 0) throw new NotFoundError("Conexão não encontrada.");
+
+  const summary = await getConnectionSummary(tenantId, connectionId);
+  if (!summary) throw new NotFoundError("Conexão atualizada, mas não encontrada ao recarregar.");
+  return summary;
+}
+
+const PHONE_DIGITS_ONLY = /^\d{10,}$/;
+
+/** Tenant-facing: sets the up-to-3 fixed phone numbers that receive the
+ * balance-alert message (see sendBalanceAlert) — a deliberately small,
+ * hand-curated list, never numbers supplied by the external caller that
+ * triggers the alert. */
+export async function updateConnectionBalanceAlertPhones(
+  tenantId: string,
+  connectionId: string,
+  phones: string[]
+): Promise<ChannelConnectionSummary> {
+  const cleaned = phones.map((p) => p.trim()).filter(Boolean);
+  if (cleaned.length > 3) {
+    throw new ValidationError("No máximo 3 números para receber o alerta de saldo baixo.");
+  }
+  const invalid = cleaned.find((p) => !PHONE_DIGITS_ONLY.test(p));
+  if (invalid) {
+    throw new ValidationError(
+      `Número inválido: "${invalid}". Use só dígitos, DDI + DDD + número (ex: 5511999999999).`
+    );
+  }
+
+  const result = await updateBalanceAlertPhones(tenantId, connectionId, cleaned);
+  if (result.count === 0) throw new NotFoundError("Conexão não encontrada.");
+
+  const summary = await getConnectionSummary(tenantId, connectionId);
+  if (!summary) throw new NotFoundError("Conexão atualizada, mas não encontrada ao recarregar.");
+  return summary;
+}
+
+/** Tenant-facing: sets which services (config/whatsapp-services.ts) this
+ * connection's API key is allowed to call — enforced by each service
+ * function below (sendPurchaseConfirmation / sendBalanceAlert), not by the
+ * auth layer itself, since it's a per-connection business rule rather than
+ * an auth concern. Doesn't require at least one service checked — a
+ * tenant temporarily disabling everything is a valid state, just means the
+ * key can't call anything until re-enabled. */
+export async function updateConnectionEnabledServices(
+  tenantId: string,
+  connectionId: string,
+  services: string[]
+): Promise<ChannelConnectionSummary> {
+  const cleaned = [...new Set(services)];
+  const invalid = cleaned.find((s) => !isValidServiceKey(s));
+  if (invalid) {
+    throw new ValidationError(`Serviço desconhecido: "${invalid}".`);
+  }
+
+  const result = await updateEnabledServices(tenantId, connectionId, cleaned);
   if (result.count === 0) throw new NotFoundError("Conexão não encontrada.");
 
   const summary = await getConnectionSummary(tenantId, connectionId);
@@ -414,6 +474,11 @@ export async function sendPurchaseConfirmation(
 ): Promise<SendMessageResult> {
   const connection = await getConnectionByApiKeyHash(hashApiKey(apiKeyPlaintext));
   if (!connection) throw new UnauthorizedError("Chave de API inválida.");
+  if (!connection.enabledServices.includes("purchase_confirmation")) {
+    throw new ForbiddenError(
+      "Este serviço (Confirmação de compra / ingresso) não está habilitado para esta conexão."
+    );
+  }
   if (connection.status !== "CONNECTED") {
     throw new ConflictError("Esta conexão não está ativa no momento.");
   }
@@ -457,4 +522,56 @@ export async function sendPurchaseConfirmation(
   }
 
   return provider.sendMessage(config, input.to, message);
+}
+
+export interface BalanceAlertInput {
+  /** Current balance the caller's own external system computed — purely
+   * for display in the message text; the threshold decision (when to call
+   * this endpoint at all) is entirely the caller's own logic, not ours. */
+  saldo?: string;
+}
+
+/**
+ * Called server-to-server by the tenant's own external wallet/spend-control
+ * system whenever its balance drops to whatever threshold *it* decides —
+ * same API-key auth as sendPurchaseConfirmation (same key the caller
+ * already uses for that), but the destination is deliberately NOT part of
+ * the request: it always fans out to the fixed `balanceAlertPhones` list
+ * the tenant curated in the dashboard (see updateConnectionBalanceAlertPhones),
+ * never to a number the caller supplies.
+ */
+export async function sendBalanceAlert(
+  apiKeyPlaintext: string,
+  input: BalanceAlertInput
+): Promise<SendMessageResult[]> {
+  const connection = await getConnectionByApiKeyHash(hashApiKey(apiKeyPlaintext));
+  if (!connection) throw new UnauthorizedError("Chave de API inválida.");
+  if (!connection.enabledServices.includes("balance_alert")) {
+    throw new ForbiddenError("Este serviço (Alerta de saldo baixo) não está habilitado para esta conexão.");
+  }
+  if (connection.status !== "CONNECTED") {
+    throw new ConflictError("Esta conexão não está ativa no momento.");
+  }
+  if (!connection.apiUrl || !connection.apiTokenCipher) {
+    throw new ConflictError("Esta conexão não está totalmente configurada.");
+  }
+  if (connection.balanceAlertPhones.length === 0) {
+    throw new ConflictError(
+      "Nenhum número cadastrado para receber o alerta de saldo baixo. Cadastre ao menos um em Minhas Conexões."
+    );
+  }
+
+  await touchApiKeyLastUsed(connection.id);
+
+  const apiToken = decryptSecret(connection.apiTokenCipher);
+  const provider = getWhatsappProvider(connection.provider.key);
+  const config = { apiUrl: connection.apiUrl, apiToken, phoneNumber: connection.phoneNumber };
+
+  const message = input.saldo?.trim()
+    ? `⚠️ *Saldo baixo*: R$ ${input.saldo.trim()}. Verifique sua carteira.`
+    : "⚠️ *Saldo baixo*. Verifique sua carteira.";
+
+  return Promise.all(
+    connection.balanceAlertPhones.map((phone) => provider.sendMessage(config, phone, message))
+  );
 }

@@ -16,6 +16,12 @@ export interface ChannelConnectionSummary {
   apiKeyPrefix: string | null;
   apiKeyCreatedAt: Date | null;
   apiKeyLastUsedAt: Date | null;
+  // Números fixos (até 3) que recebem o alerta de saldo baixo — ver
+  // sendBalanceAlert em whatsapp-connection.service.ts.
+  balanceAlertPhones: string[];
+  // Quais serviços (config/whatsapp-services.ts) a chave de API pode
+  // chamar — ver sendPurchaseConfirmation / sendBalanceAlert.
+  enabledServices: string[];
 }
 
 const summarySelect = {
@@ -31,6 +37,8 @@ const summarySelect = {
   apiKeyPrefix: true,
   apiKeyCreatedAt: true,
   apiKeyLastUsedAt: true,
+  balanceAlertPhones: true,
+  enabledServices: true,
 } as const;
 
 /** Get-or-create the tenant's channel row for a given type (WHATSAPP, ...). */
@@ -99,6 +107,27 @@ export function updateConnectionMeta(
   return prisma.channelConnection.updateMany({
     where: { id: connectionId, tenantId },
     data,
+  });
+}
+
+/** Tenant-editable list of up to 3 fixed phone numbers that receive the
+ * balance-alert message (see sendBalanceAlert) — deliberately separate from
+ * updateConnectionMeta since it's edited from its own dialog, not the
+ * name/phone form. */
+export function updateBalanceAlertPhones(tenantId: string, connectionId: string, phones: string[]) {
+  return prisma.channelConnection.updateMany({
+    where: { id: connectionId, tenantId },
+    data: { balanceAlertPhones: phones },
+  });
+}
+
+/** Tenant-editable set of services (config/whatsapp-services.ts) this
+ * connection's API key is allowed to call — enforced inside each service
+ * function (sendPurchaseConfirmation / sendBalanceAlert), not here. */
+export function updateEnabledServices(tenantId: string, connectionId: string, services: string[]) {
+  return prisma.channelConnection.updateMany({
+    where: { id: connectionId, tenantId },
+    data: { enabledServices: services },
   });
 }
 

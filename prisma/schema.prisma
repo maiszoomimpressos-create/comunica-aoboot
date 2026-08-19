@@ -409,6 +409,18 @@ model ChannelConnection {
   // uma autentica quem nos chama, a outra autentica quem a Z-API chama).
   webhookSecret String?
 
+  // Números fixos (até 3) que recebem o alerta de saldo baixo disparado
+  // pelo sistema externo do tenant via POST /api/v1/whatsapp/balance-alert
+  // — cadastrados pelo tenant no painel, nunca enviados pelo chamador da
+  // API (ver sendBalanceAlert em whatsapp-connection.service.ts).
+  balanceAlertPhones String[] @default([])
+
+  // Quais serviços (src/config/whatsapp-services.ts) a chave de API desta
+  // conexão pode chamar — "purchase_confirmation" vem habilitado por
+  // padrão em toda conexão (nova ou já existente) pra nunca quebrar a
+  // integração de ingresso já em produção; "balance_alert" é opt-in.
+  enabledServices String[] @default(["purchase_confirmation"])
+
   tenantId     String
   organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 

@@ -22,6 +22,8 @@ import { SendTestMessageForm } from "./send-test-message-form";
 import { ApiKeySection } from "./api-key-section";
 import { QrCodeSection } from "./qr-code-section";
 import { EditConnectionDialog } from "./edit-connection-dialog";
+import { BalanceAlertPhonesDialog } from "./balance-alert-phones-dialog";
+import { EnabledServicesDialog } from "./enabled-services-dialog";
 import { retestWhatsappConnectionAction } from "@/actions/whatsapp/retest-connection";
 import { deleteWhatsappConnectionAction } from "@/actions/whatsapp/delete-connection";
 import type { ChannelConnectionSummary } from "@/repositories/channel-connection.repository";
@@ -126,6 +128,20 @@ export function ConnectionCard({
                 phoneNumber: connection.phoneNumber,
               }}
             />
+            {isFullyConnected && (
+              <EnabledServicesDialog
+                tenantSlug={tenantSlug}
+                connectionId={connection.id}
+                defaultServices={connection.enabledServices}
+              />
+            )}
+            {isFullyConnected && connection.enabledServices.includes("balance_alert") && (
+              <BalanceAlertPhonesDialog
+                tenantSlug={tenantSlug}
+                connectionId={connection.id}
+                defaultPhones={connection.balanceAlertPhones}
+              />
+            )}
             <AlertDialog>
               <AlertDialogTrigger render={<Button variant="ghost" size="sm" disabled={deleting} />}>
                 <Trash2 className="size-4" />
