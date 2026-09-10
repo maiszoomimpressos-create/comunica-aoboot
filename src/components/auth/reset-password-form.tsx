@@ -7,6 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { resetPassword } from "@/actions/auth/reset-password";
 import { passwordSchema } from "@/lib/auth/password-policy";
@@ -58,7 +59,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
 
         <Field data-invalid={!!errors.newPassword}>
           <FieldLabel htmlFor="newPassword">Nova senha</FieldLabel>
-          <Input id="newPassword" type="password" placeholder="••••••••" {...register("newPassword")} />
+          <PasswordInput id="newPassword" placeholder="••••••••" {...register("newPassword")} />
           <PasswordStrengthMeter password={newPassword ?? ""} />
           <FieldError errors={[errors.newPassword]} />
         </Field>

@@ -8,6 +8,7 @@ import { z } from "zod";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import {
   acceptInvitationAsExistingUser,
@@ -114,7 +115,7 @@ export function AcceptInvitationForm({
 
         <Field data-invalid={!!errors.password}>
           <FieldLabel htmlFor="password">Senha</FieldLabel>
-          <Input id="password" type="password" {...register("password")} />
+          <PasswordInput id="password" {...register("password")} />
           <PasswordStrengthMeter password={password ?? ""} />
           <FieldError errors={[errors.password]} />
         </Field>

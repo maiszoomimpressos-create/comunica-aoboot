@@ -5,7 +5,7 @@ import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Field, FieldGroup, FieldLabel, FieldError, FieldDescription } from "@/components/ui/field";
 import { changePassword } from "@/actions/account/change-password";
 import { passwordSchema } from "@/lib/auth/password-policy";
@@ -46,13 +46,13 @@ export function SecurityForm() {
       <FieldGroup>
         <Field data-invalid={!!errors.currentPassword}>
           <FieldLabel htmlFor="currentPassword">Senha atual</FieldLabel>
-          <Input id="currentPassword" type="password" {...register("currentPassword")} />
+          <PasswordInput id="currentPassword" {...register("currentPassword")} />
           <FieldError errors={[errors.currentPassword]} />
         </Field>
 
         <Field data-invalid={!!errors.newPassword}>
           <FieldLabel htmlFor="newPassword">Nova senha</FieldLabel>
-          <Input id="newPassword" type="password" {...register("newPassword")} />
+          <PasswordInput id="newPassword" {...register("newPassword")} />
           <PasswordStrengthMeter password={newPassword ?? ""} />
           <FieldDescription>Outras sessões serão encerradas.</FieldDescription>
           <FieldError errors={[errors.newPassword]} />
