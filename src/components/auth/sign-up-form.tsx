@@ -8,6 +8,7 @@ import { z } from "zod";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import {
   Field,
   FieldGroup,
@@ -79,7 +80,7 @@ export function SignUpForm() {
 
         <Field data-invalid={!!errors.password}>
           <FieldLabel htmlFor="password">Senha</FieldLabel>
-          <Input id="password" type="password" placeholder="••••••••" {...register("password")} />
+          <PasswordInput id="password" placeholder="••••••••" {...register("password")} />
           <PasswordStrengthMeter password={password ?? ""} />
           <FieldError errors={[errors.password]} />
         </Field>

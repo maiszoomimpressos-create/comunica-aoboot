@@ -8,6 +8,7 @@ import { z } from "zod";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Field, FieldGroup, FieldLabel, FieldError, FieldDescription } from "@/components/ui/field";
 import { signIn } from "@/actions/auth/sign-in";
 
@@ -63,7 +64,7 @@ export function SignInForm() {
               Esqueceu a senha?
             </Link>
           </div>
-          <Input id="password" type="password" placeholder="••••••••" {...register("password")} />
+          <PasswordInput id="password" placeholder="••••••••" {...register("password")} />
           <FieldError errors={[errors.password]} />
         </Field>
 
