@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Download } from "lucide-react";
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
 import { getListDetail } from "@/services/whatsapp-contacts.service";
 import { NotFoundError } from "@/lib/server/errors";
+import { Button } from "@/components/ui/button";
 import { AddContactsDialog } from "@/components/dashboard/whatsapp/campaigns/add-contacts-dialog";
 import { ListMembersTable } from "@/components/dashboard/whatsapp/campaigns/list-members-table";
 
@@ -46,9 +47,20 @@ export default async function ContactListDetailPage({
           <h1 className="text-2xl font-semibold tracking-tight">{list.name}</h1>
           <p className="text-muted-foreground">{members.length} contato(s) nesta lista.</p>
         </div>
-        {canManage && (
-          <AddContactsDialog tenantSlug={tenantSlug} listId={listId} availableContacts={availableContacts} />
-        )}
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            nativeButton={false}
+            render={<a href={`/app/${tenantSlug}/modulos/whatsapp/campanhas/${connectionId}/listas/${listId}/export`} />}
+          >
+            <Download className="size-4" />
+            Baixar lista
+          </Button>
+          {canManage && (
+            <AddContactsDialog tenantSlug={tenantSlug} listId={listId} availableContacts={availableContacts} />
+          )}
+        </div>
       </div>
 
       <ListMembersTable tenantSlug={tenantSlug} listId={listId} members={members} canManage={canManage} />
