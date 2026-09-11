@@ -29,6 +29,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/** First trimmed, non-empty string among the candidates — used to pick a
+ * contact's display name from Z-API's several name-ish fields, in order of
+ * preference (see listContacts). */
+function firstNonEmpty(...candidates: unknown[]): string {
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  return "";
+}
+
 function buildHeaders(apiToken: string, extra?: Record<string, string>): HeadersInit {
   const headers: Record<string, string> = { ...extra };
   if (apiToken) headers["Client-Token"] = apiToken;
@@ -163,7 +173,8 @@ export class ZApiProvider implements WhatsappProvider {
    * WhatsApp contacts, Z-API falls back to returning the formatted phone
    * number itself as `name`/`vname` (e.g. "+55 46 8821-2387") — we detect
    * and discard that case so a "name" is only ever used when it's an
-   * actual human-set name.
+   * actual human-set name. Tries `name` > `short` > `notify` before giving
+   * up (same reasoning as listContacts's fallback chain).
    *
    * Deliberately NOT a digit-for-digit comparison against the queried
    * phone: Z-API's fallback formatting can drop/shift digits (confirmed
@@ -191,20 +202,30 @@ export class ZApiProvider implements WhatsappProvider {
     const data = await response.json().catch(() => null);
     if (!response.ok || !data || typeof data !== "object") return { ok: false };
 
-    const name = (data as { name?: string }).name?.trim();
+    // Same "name" > "short" > "notify" fallback chain as listContacts —
+    // `name` alone is only filled when the instance saved this number in
+    // its own device contacts, which is rare for a business number.
+    const row = data as { name?: unknown; short?: unknown; notify?: unknown };
+    const name = firstNonEmpty(row.name, row.short, row.notify);
     if (!name || !isRealName(name)) return { ok: false };
 
     return { ok: true, name };
   }
 
   /** `GET .../contacts` — Z-API's documented bulk endpoint for every
-   * contact saved in the connected instance's own WhatsApp address book,
-   * paginated via `?page=&pageSize=`. **Not yet confirmed against a real
-   * Z-API instance** (unlike every other endpoint in this file) — same
-   * caution as the still-unconfirmed webhook event-type strings in
-   * whatsapp-connection.service.ts: if the real response shape differs,
-   * this silently returns an empty list (never throws, never crashes the
-   * sync) until corrected against a live instance. */
+   * WhatsApp contact/chat the connected instance has, paginated via
+   * `?page=&pageSize=`. Confirmed against a real Z-API instance (2972
+   * contacts, 2026-09-11): `name`/`short` only come back filled when the
+   * number was saved in the *instance's own device contacts* — for a
+   * business number, that's true for almost nobody, so relying on `name`
+   * alone left virtually every contact nameless. `notify` (the display
+   * name the contact set for themselves in WhatsApp) and `vname` (vCard
+   * name) are populated far more often and don't require the instance to
+   * have saved the number — see Z-API's own field docs
+   * (developer.z-api.io/en/contacts/get-contacts). Preference order:
+   * name > short > vname > notify (most to least likely to be a
+   * deliberately-chosen full name; `notify` can be a nickname/emoji, but
+   * it's still better than nothing). */
   async listContacts(config: WhatsappConnectionConfig): Promise<ListContactsResult> {
     const contacts: ProviderContact[] = [];
     const pageSize = 100;
@@ -242,7 +263,7 @@ export class ZApiProvider implements WhatsappProvider {
         if (!isRecord(row)) continue;
         const phone = typeof row.phone === "string" ? row.phone.trim() : "";
         if (!phone) continue;
-        const rawName = typeof row.name === "string" ? row.name.trim() : "";
+        const rawName = firstNonEmpty(row.name, row.short, row.vname, row.notify);
         contacts.push({ phone, ...(rawName && isRealName(rawName) ? { name: rawName } : {}) });
       }
 
