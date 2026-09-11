@@ -22,13 +22,13 @@ datasource db {
 // node_modules/better-auth/dist/plugins/{admin,organization}/schema.d.mts.
 
 model User {
-  id            String    @id @default(cuid())
+  id            String   @id @default(cuid())
   name          String
-  email         String    @unique
-  emailVerified Boolean   @default(false)
+  email         String   @unique
+  emailVerified Boolean  @default(false)
   image         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   // plugin: admin
   role       String?
@@ -70,18 +70,18 @@ model Session {
 }
 
 model Account {
-  id           String    @id @default(cuid())
-  accountId    String
-  providerId   String
-  accessToken  String?
-  refreshToken String?
-  idToken      String?
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
   accessTokenExpiresAt  DateTime?
   refreshTokenExpiresAt DateTime?
-  scope        String?
-  password     String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -110,23 +110,23 @@ enum TenantStatus {
 }
 
 model Organization {
-  id        String       @id @default(cuid())
+  id        String    @id @default(cuid())
   name      String
-  slug      String       @unique
+  slug      String    @unique
   logo      String?
-  createdAt DateTime     @default(now())
-  updatedAt DateTime?    @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime? @updatedAt
 
   // additionalFields do plugin organization (ver lib/auth/auth.ts)
-  primaryColor String?
-  status       TenantStatus @default(ACTIVE)
+  primaryColor        String?
+  status              TenantStatus @default(ACTIVE)
   // Nome exibido nas mensagens automáticas (ex.: confirmação de compra do
   // WhatsApp) — pode ser diferente de `name` (ex.: "tipo7.com" em vez da
   // razão social). Opcional: cai no `name` quando não preenchido.
   messageBusinessName String?
 
-  members       Member[]
-  invitations   Invitation[]
+  members        Member[]
+  invitations    Invitation[]
   activeSessions Session[]
 
   // domínio próprio (RBAC granular, planos, marketplace, auditoria)
@@ -136,6 +136,9 @@ model Organization {
   auditLogs             AuditLog[]
   communicationChannels CommunicationChannel[]
   channelConnections    ChannelConnection[]
+  contacts              Contact[]
+  contactLists          ContactList[]
+  campaigns             Campaign[]
 
   @@index([status])
   @@map("organization")
@@ -193,7 +196,7 @@ model Permission {
 
 model Role {
   id        String   @id @default(cuid())
-  key       String   // "owner" | "admin" | "member" | "billing" | slug custom
+  key       String // "owner" | "admin" | "member" | "billing" | slug custom
   name      String
   isSystem  Boolean  @default(false)
   createdAt DateTime @default(now())
@@ -266,7 +269,7 @@ model Subscription {
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
 
-  tenantId String       @unique
+  tenantId     String       @unique
   organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   planId String
@@ -309,7 +312,7 @@ model TenantModule {
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
 
-  tenantId String
+  tenantId     String
   organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   moduleId String
@@ -432,6 +435,11 @@ model ChannelConnection {
 
   webhookEvents WebhookEvent[]
 
+  contacts         Contact[]
+  contactLists     ContactList[]
+  campaigns        Campaign[]
+  campaignSettings ConnectionCampaignSettings?
+
   @@index([tenantId, channelId])
   @@map("channel_connection")
 }
@@ -440,14 +448,14 @@ model ChannelConnection {
 // entrega/leitura, conexão/desconexão, ...) — guardado sem interpretar o
 // formato ainda; a leitura/uso desses dados é trabalho futuro (ver plano).
 model WebhookEvent {
-  id           String   @id @default(cuid())
+  id           String            @id @default(cuid())
   connectionId String
   connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   // "z-api" hoje — mesmo valor de ChannelProvider.key, deixa espaço pra
   // outros provedores mais pra frente sem mudar o formato da tabela.
-  source  String
-  payload Json
+  source     String
+  payload    Json
   receivedAt DateTime @default(now())
 
   @@index([connectionId, receivedAt])
@@ -455,18 +463,222 @@ model WebhookEvent {
 }
 
 // =====================================================================
+// Campanhas — disparo em massa de WhatsApp (fila persistente)
+// =====================================================================
+// Vive em cima de ChannelConnection: a mesma conexão que já serve
+// Confirmação de Compra pode servir Campanhas também (produto "campanhas"
+// em config/whatsapp-products.ts), ou o tenant conecta um número dedicado
+// — a escolha é dele, nada aqui força uma coisa ou outra.
+
+model Contact {
+  id             String    @id @default(cuid())
+  phone          String
+  name           String?
+  // "sync" = capturado da agenda do WhatsApp conectado — única origem
+  // suportada por enquanto (import por CSV/cadastro manual ficam para uma
+  // fase futura, ver plano do módulo de campanhas).
+  source         String    @default("sync")
+  optedOut       Boolean   @default(false)
+  optedOutAt     DateTime?
+  // "keyword" (respondeu SAIR/PARAR/...) | "manual" (bloqueio pelo painel)
+  optedOutSource String?
+  // Autodeclarado pelo tenant no momento em que sincroniza a agenda — não
+  // há como o sistema verificar consentimento real, só registrar a
+  // declaração de quem opera a conexão.
+  consentStatus  String    @default("declared")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenantId     String
+  organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  listMemberships    ContactListMember[]
+  campaignRecipients CampaignRecipient[]
+
+  @@unique([connectionId, phone])
+  @@index([tenantId])
+  @@map("contact")
+}
+
+model ContactList {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId     String
+  organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  members   ContactListMember[]
+  campaigns Campaign[]
+
+  @@index([tenantId, connectionId])
+  @@map("contact_list")
+}
+
+model ContactListMember {
+  id      String   @id @default(cuid())
+  addedAt DateTime @default(now())
+
+  listId String
+  list   ContactList @relation(fields: [listId], references: [id], onDelete: Cascade)
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([listId, contactId])
+  @@map("contact_list_member")
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+model Campaign {
+  id          String         @id @default(cuid())
+  name        String
+  messageText String
+  // "image" | "video" | null (texto puro)
+  mediaType   String?
+  mediaUrl    String?
+  status      CampaignStatus @default(DRAFT)
+
+  // Overrides opcionais desta campanha — null usa o padrão gravado em
+  // ConnectionCampaignSettings da conexão. Sempre resolvidos via
+  // resolveCampaignSettings() no service, nunca lidos crus pelo worker.
+  batchSize                 Int?
+  minMessageIntervalSeconds Int?
+  maxMessageIntervalSeconds Int?
+  minBatchPauseSeconds      Int?
+  maxBatchPauseSeconds      Int?
+
+  // Checkbox obrigatório na tela de "iniciar campanha": declaração do
+  // tenant de que tem base legal pra mandar mensagem pra essa lista — não
+  // é uma verificação técnica (impossível de verificar de fato), só
+  // registra que a decisão foi tomada conscientemente.
+  consentConfirmed Boolean @default(false)
+
+  // Motivo de uma pausa automática (ver seção "pausa automática" do
+  // plano) — nulo quando pausada manualmente ou nunca pausada.
+  pausedReason String?
+
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  tenantId     String
+  organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  listId String
+  list   ContactList @relation(fields: [listId], references: [id])
+
+  recipients CampaignRecipient[]
+
+  @@index([tenantId, connectionId])
+  @@index([connectionId, status])
+  @@map("campaign")
+}
+
+enum CampaignRecipientStatus {
+  PENDING
+  PROCESSING
+  SENT
+  DELIVERED
+  FAILED
+  CANCELLED
+  OPTED_OUT
+}
+
+model CampaignRecipient {
+  id           String                  @id @default(cuid())
+  status       CampaignRecipientStatus @default(PENDING)
+  attempts     Int                     @default(0)
+  errorMessage String?
+  // Marcado quando um worker reivindica a linha (PENDING → PROCESSING,
+  // atômico via updateMany) — o mecanismo de lock que evita dois workers
+  // enviando a mesma mensagem (ver campaign-dispatcher.service.ts). Um
+  // recovery job reverte pra PENDING se ficar "processing" travado por
+  // tempo demais (o servidor caiu no meio do envio).
+  lockedAt     DateTime?
+  scheduledAt  DateTime?
+  sentAt       DateTime?
+  deliveredAt  DateTime?
+  failedAt     DateTime?
+
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id])
+
+  @@unique([campaignId, contactId])
+  @@index([campaignId, status])
+  @@map("campaign_recipient")
+}
+
+// Ritmo de disparo por conexão — nunca compartilhado entre números, cada
+// ChannelConnection tem a sua própria linha (seção "controle por
+// número/conexão" do plano). Os defaults em
+// config/whatsapp-campaign-defaults.ts só preenchem essa linha na
+// primeira vez; dali em diante o tenant edita livremente pela tela de
+// configuração da conexão — nada aqui é fixo no código.
+model ConnectionCampaignSettings {
+  id String @id @default(cuid())
+
+  sendWindowStart String @default("07:30")
+  sendWindowEnd   String @default("19:30")
+
+  batchSize Int @default(5)
+
+  minMessageIntervalSeconds Int @default(12)
+  maxMessageIntervalSeconds Int @default(18)
+
+  minBatchPauseSeconds Int @default(15)
+  maxBatchPauseSeconds Int @default(20)
+
+  // null = sem limite — a spec deste módulo é explícita: não existe um
+  // número "seguro" universal, então não assumimos um teto por padrão.
+  dailyLimit     Int?
+  dailySentCount Int       @default(0)
+  dailySentDate  DateTime?
+
+  maxConsecutiveErrors Int @default(5)
+
+  updatedAt DateTime @updatedAt
+
+  connectionId String            @unique
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@map("connection_campaign_settings")
+}
+
+// =====================================================================
 // Auditoria
 // =====================================================================
 
 model AuditLog {
-  id          String   @id @default(cuid())
-  action      String   // "tenant.updated", "member.invited", "role.permissions_changed", ...
-  targetType  String?
-  targetId    String?
-  metadata    Json?
-  ip          String?
-  userAgent   String?
-  createdAt   DateTime @default(now())
+  id         String   @id @default(cuid())
+  action     String // "tenant.updated", "member.invited", "role.permissions_changed", ...
+  targetType String?
+  targetId   String?
+  metadata   Json?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
 
   tenantId     String?
   organization Organization? @relation(fields: [tenantId], references: [id], onDelete: SetNull)

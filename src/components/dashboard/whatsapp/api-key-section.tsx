@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { rotateWhatsappApiKeyAction } from "@/actions/whatsapp/rotate-api-key";
 import { revokeWhatsappApiKeyAction } from "@/actions/whatsapp/revoke-api-key";
-import { NOTIFICATION_TYPES } from "@/config/whatsapp-notification-types";
+import { WhatsappApiDocs } from "./whatsapp-api-docs";
 
 function formatDate(date: Date | string | null) {
   if (!date) return "—";
@@ -158,59 +158,8 @@ export function ApiKeySection({
       </div>
 
       {showDocs && (
-        <div className="mt-3 space-y-2 rounded-lg border border-border bg-muted p-3 text-xs">
-          <p className="font-medium text-foreground">
-            POST /api/v1/whatsapp/purchase-confirmation
-          </p>
-          <p className="text-muted-foreground">
-            Header: <code className="text-foreground">Authorization: Bearer &lt;sua chave&gt;</code>
-          </p>
-          <pre className="overflow-x-auto rounded-md bg-background p-2 text-foreground">
-{`{
-  "to": "5511999999999",
-  "type": "ingresso_emitido",
-  "recipientName": "Maria Oliveira",
-  "details": {},
-  "qrData": "texto ou código a virar QR code"
-}`}
-          </pre>
-          <p className="text-muted-foreground">
-            <code className="text-foreground">to</code>: só números, sem espaço/traço/parênteses —
-            código do país + DDD + número (ex: 55 11 999999999 → 5511999999999).
-          </p>
-          <p className="text-muted-foreground">
-            <code className="text-foreground">recipientName</code>: o nome cadastrado no seu
-            sistema pra essa pessoa — não precisa ser igual ao nome do perfil de WhatsApp de quem
-            recebe.
-          </p>
-          <p className="text-muted-foreground">
-            <code className="text-foreground">type</code> (opcional, padrão{" "}
-            <code className="text-foreground">compra_confirmada</code>): define o texto da
-            mensagem e se <code className="text-foreground">qrData</code> é obrigatório.
-          </p>
-          <ul className="ml-4 list-disc space-y-0.5 text-muted-foreground">
-            {NOTIFICATION_TYPES.map((t) => (
-              <li key={t.key}>
-                <code className="text-foreground">{t.key}</code> — {t.label}
-                {t.requiresQr && " (exige qrData)"}
-                {t.requiredDetailKeys.length > 0 &&
-                  ` (details obrigatório: ${t.requiredDetailKeys.join(", ")})`}
-              </li>
-            ))}
-          </ul>
-          <p className="text-muted-foreground">
-            O texto da mensagem é sempre montado por nós a partir do <code className="text-foreground">type</code>: cumprimenta pelo
-            nome do WhatsApp de quem recebe (quando existir) e sempre cita{" "}
-            <code className="text-foreground">recipientName</code> e o nome do seu negócio
-            (configurável em Minha Empresa). Quando <code className="text-foreground">qrData</code>{" "}
-            é enviado, geramos o QR code e mandamos como imagem; sem ele, vai como texto.
-          </p>
-          <p className="text-muted-foreground">
-            <code className="text-foreground">note</code> (opcional, até 500 caracteres): uma
-            linha de texto livre sua, adicionada no final da mensagem — ex: &ldquo;Apresente esse
-            ingresso na portaria do evento, não perca&rdquo;. Complementa, nunca substitui o texto
-            montado por nós.
-          </p>
+        <div className="mt-3">
+          <WhatsappApiDocs />
         </div>
       )}
 

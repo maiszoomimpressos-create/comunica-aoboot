@@ -1,6 +1,8 @@
 import type { WhatsappProvider } from "../provider";
 import type {
   ContactNameResult,
+  ListContactsResult,
+  ProviderContact,
   QrCodeResult,
   SendMessageResult,
   TestConnectionResult,
@@ -11,6 +13,20 @@ const REQUEST_TIMEOUT_MS = 15_000;
 
 function trimTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "");
+}
+
+/** Z-API's "no name saved" fallback is the formatted phone number itself
+ * (e.g. "+55 46 8821-2387") — shared by getContactName and listContacts so
+ * both apply the exact same "is this actually a name?" rule. A real name
+ * always has letters; anything shaped like only digits/spaces/+/-/() is
+ * the fallback, not a name. */
+function isRealName(value: string): boolean {
+  const looksLikePhoneNumber = /^[+\d][\d\s\-()]*$/.test(value);
+  return !looksLikePhoneNumber;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function buildHeaders(apiToken: string, extra?: Record<string, string>): HeadersInit {
@@ -176,15 +192,64 @@ export class ZApiProvider implements WhatsappProvider {
     if (!response.ok || !data || typeof data !== "object") return { ok: false };
 
     const name = (data as { name?: string }).name?.trim();
-    if (!name) return { ok: false };
-
-    const looksLikePhoneNumber = /^[+\d][\d\s\-()]*$/.test(name);
-    if (looksLikePhoneNumber) {
-      // Z-API's own "no name saved" fallback — not a real name.
-      return { ok: false };
-    }
+    if (!name || !isRealName(name)) return { ok: false };
 
     return { ok: true, name };
+  }
+
+  /** `GET .../contacts` — Z-API's documented bulk endpoint for every
+   * contact saved in the connected instance's own WhatsApp address book,
+   * paginated via `?page=&pageSize=`. **Not yet confirmed against a real
+   * Z-API instance** (unlike every other endpoint in this file) — same
+   * caution as the still-unconfirmed webhook event-type strings in
+   * whatsapp-connection.service.ts: if the real response shape differs,
+   * this silently returns an empty list (never throws, never crashes the
+   * sync) until corrected against a live instance. */
+  async listContacts(config: WhatsappConnectionConfig): Promise<ListContactsResult> {
+    const contacts: ProviderContact[] = [];
+    const pageSize = 100;
+
+    for (let page = 1; ; page++) {
+      const url = `${trimTrailingSlash(config.apiUrl)}/contacts?page=${page}&pageSize=${pageSize}`;
+
+      let response: Response;
+      try {
+        response = await fetchWithTimeout(url, {
+          method: "GET",
+          headers: buildHeaders(config.apiToken),
+        });
+      } catch {
+        return {
+          ok: contacts.length > 0,
+          contacts,
+          message: "Falha de comunicação ao buscar contatos da instância.",
+        };
+      }
+
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        return {
+          ok: contacts.length > 0,
+          contacts,
+          message:
+            (data as { error?: string } | null)?.error ?? `Erro ao buscar contatos (HTTP ${response.status}).`,
+          raw: data,
+        };
+      }
+
+      const rows = Array.isArray(data) ? data : [];
+      for (const row of rows) {
+        if (!isRecord(row)) continue;
+        const phone = typeof row.phone === "string" ? row.phone.trim() : "";
+        if (!phone) continue;
+        const rawName = typeof row.name === "string" ? row.name.trim() : "";
+        contacts.push({ phone, ...(rawName && isRealName(rawName) ? { name: rawName } : {}) });
+      }
+
+      if (rows.length < pageSize) break; // last page
+    }
+
+    return { ok: true, contacts, message: `${contacts.length} contato(s) encontrado(s).` };
   }
 
   async sendMessage(
@@ -204,6 +269,22 @@ export class ZApiProvider implements WhatsappProvider {
     return this.postJson(config, "send-image", {
       phone: to,
       image,
+      ...(caption ? { caption } : {}),
+    });
+  }
+
+  /** `send-video` — sibling endpoint of `send-image`, same envelope.
+   * **Not yet confirmed against a real Z-API instance** (send-image was;
+   * see the class doc comment) — used only by the Campanhas module. */
+  async sendVideo(
+    config: WhatsappConnectionConfig,
+    to: string,
+    video: string,
+    caption?: string
+  ): Promise<SendMessageResult> {
+    return this.postJson(config, "send-video", {
+      phone: to,
+      video,
       ...(caption ? { caption } : {}),
     });
   }

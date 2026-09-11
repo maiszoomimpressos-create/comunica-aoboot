@@ -164,6 +164,43 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     buildMessage: ({ whatsappName, businessName, details }) =>
       `${greet(whatsappName)} Seu agendamento em ${businessName} foi confirmado para ${details.data} às ${details.horario}.`,
   },
+  {
+    key: "notificacao",
+    label: "Notificação genérica (qualquer confirmação de ação)",
+    // The catch-all entry point for niches we haven't (and may never)
+    // special-case: saldo debitado, cadastro concluído, movimentação
+    // registrada, agendamento marcado, etc. Instead of one curated type per
+    // niche — which would mean coming back here for every new business
+    // vertical — the caller supplies the human-readable sentence itself in
+    // `details.evento`; we only wrap it with the greeting and business
+    // signature so it still reads consistently across tenants. Anything
+    // that needs more than a sentence (a QR code, specific required
+    // fields the message logic depends on) still gets its own curated
+    // type instead — this one is for "something happened, say so", not
+    // for special behavior.
+    requiresQr: false,
+    requiredDetailKeys: ["evento"],
+    buildMessage: ({ whatsappName, businessName, details }) =>
+      [greet(whatsappName), "", details.evento, "", businessName].join("\n"),
+  },
+  {
+    key: "apk_disponivel",
+    label: "Link de APK disponível",
+    requiresQr: false,
+    // Primeiro tipo pensado pra um caller fora do contexto de compra/ingresso
+    // (MAI Drive — mobility-app, 28/08/2026): manda o link de download de um
+    // APK (app do motorista). `versao` é opcional — some da mensagem se não
+    // vier, mesmo tratamento de opcional que formatEventDateTime/formatLocation.
+    // Não usa `businessName` de propósito: o contexto aqui é "novo app
+    // disponível", não uma compra feita numa empresa.
+    requiredDetailKeys: ["link"],
+    buildMessage: ({ whatsappName, details }) => {
+      const lines = [greet(whatsappName), "", "Uma nova versão do app está disponível para download:"];
+      if (details.versao?.trim()) lines.push(`Versão: ${bold(details.versao.trim())}`);
+      lines.push(details.link);
+      return lines.join("\n");
+    },
+  },
 ];
 
 /** Resolves a type key to its definition — `undefined` falls back to the

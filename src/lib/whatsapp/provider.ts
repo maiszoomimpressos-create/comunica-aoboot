@@ -1,5 +1,6 @@
 import type {
   ContactNameResult,
+  ListContactsResult,
   QrCodeResult,
   SendMessageResult,
   TestConnectionResult,
@@ -32,6 +33,23 @@ export interface WhatsappProvider {
     image: string,
     caption?: string
   ): Promise<SendMessageResult>;
+  /** Same contract as `sendImage`, for video — `video` is a URL or a
+   * `data:video/...;base64,...` data URI. Used by the Campanhas module
+   * (see whatsapp-campaign-defaults.ts / campaign-dispatcher.service.ts);
+   * no other feature sends video today. */
+  sendVideo(
+    config: WhatsappConnectionConfig,
+    to: string,
+    video: string,
+    caption?: string
+  ): Promise<SendMessageResult>;
+  /** Best-effort bulk fetch of every contact saved in the connected
+   * WhatsApp's own address book — used by the Campanhas module to seed
+   * `Contact` rows (see contact.repository.ts's syncContactsFromProvider).
+   * Never throws; a failure comes back as `{ ok: false, contacts: [] }`
+   * so the caller can show it as normal UI state, same convention as
+   * every other provider method. */
+  listContacts(config: WhatsappConnectionConfig): Promise<ListContactsResult>;
   /** Fetches the QR code the account owner scans (with the phone that owns
    * the number) to pair the WhatsApp session — a one-time step needed even
    * after credentials are valid; see AWAITING_QR_SCAN. */
