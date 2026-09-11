@@ -14,6 +14,7 @@ import { SyncContactsButton } from "@/components/dashboard/whatsapp/campaigns/sy
 import { ContactsTable } from "@/components/dashboard/whatsapp/campaigns/contacts-table";
 import { CreateListDialog } from "@/components/dashboard/whatsapp/campaigns/create-list-dialog";
 import { ContactListCard } from "@/components/dashboard/whatsapp/campaigns/contact-list-card";
+import { CollapsibleSection } from "@/components/dashboard/whatsapp/campaigns/collapsible-section";
 import { CreateCampaignDialog } from "@/components/dashboard/whatsapp/campaigns/create-campaign-dialog";
 import { CampaignCard } from "@/components/dashboard/whatsapp/campaigns/campaign-card";
 import { CampaignSettingsDialog } from "@/components/dashboard/whatsapp/campaigns/campaign-settings-dialog";
@@ -89,21 +90,27 @@ export default async function CampaignsConnectionPage({
         <ContactsTable tenantSlug={tenantSlug} contacts={contacts} canManage={canManage} />
       </section>
 
-      <section className="space-y-4">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-lg font-medium">Listas</h2>
-          {canManage && <CreateListDialog tenantSlug={tenantSlug} connectionId={connectionId} />}
-        </div>
+      <CollapsibleSection
+        title="Listas"
+        subtitle={`${lists.length} lista(s)`}
+        actions={canManage && <CreateListDialog tenantSlug={tenantSlug} connectionId={connectionId} />}
+      >
         {lists.length === 0 ? (
           <p className="text-sm text-muted-foreground">Nenhuma lista criada ainda.</p>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2">
             {lists.map((list) => (
-              <ContactListCard key={list.id} tenantSlug={tenantSlug} list={list} canManage={canManage} />
+              <ContactListCard
+                key={list.id}
+                tenantSlug={tenantSlug}
+                list={list}
+                connectionPhoneNumber={connection.phoneNumber}
+                canManage={canManage}
+              />
             ))}
           </div>
         )}
-      </section>
+      </CollapsibleSection>
 
       <section className="space-y-4">
         <div className="flex items-center justify-between gap-4">
