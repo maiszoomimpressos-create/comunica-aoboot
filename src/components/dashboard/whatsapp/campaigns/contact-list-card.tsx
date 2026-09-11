@@ -18,15 +18,21 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { deleteContactListAction } from "@/actions/campaigns/delete-list";
+import { RenameListDialog } from "./rename-list-dialog";
 import type { ContactListSummary } from "@/repositories/contact-list.repository";
 
 export function ContactListCard({
   tenantSlug,
   list,
+  /** The WhatsApp number contacts in this list were synced from — always
+   * the connection the list belongs to, read-only (a list can't be moved
+   * to a different connection, unlike its name). */
+  connectionPhoneNumber,
   canManage,
 }: {
   tenantSlug: string;
   list: ContactListSummary;
+  connectionPhoneNumber: string;
   canManage: boolean;
 }) {
   const router = useRouter();
@@ -49,11 +55,14 @@ export function ContactListCard({
         </div>
         <div className="min-w-0">
           <p className="truncate font-medium">{list.name}</p>
-          <p className="text-sm text-muted-foreground">{list.memberCount} contato(s)</p>
+          <p className="text-sm text-muted-foreground">
+            {list.memberCount} contato(s) · de {connectionPhoneNumber}
+          </p>
         </div>
       </Link>
 
       <div className="flex shrink-0 items-center gap-1">
+        {canManage && <RenameListDialog tenantSlug={tenantSlug} listId={list.id} currentName={list.name} />}
         <Button
           variant="ghost"
           size="sm"
