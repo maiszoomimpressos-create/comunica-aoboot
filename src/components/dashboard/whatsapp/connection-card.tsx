@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Trash2, RefreshCw } from "lucide-react";
+import { Trash2, RefreshCw, Send } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -128,6 +129,17 @@ export function ConnectionCard({
                 phoneNumber: connection.phoneNumber,
               }}
             />
+            {isFullyConnected && (
+              <Button
+                variant="outline"
+                size="sm"
+                nativeButton={false}
+                render={<Link href={`/app/${tenantSlug}/modulos/whatsapp/campanhas/${connection.id}`} />}
+              >
+                <Send className="size-4" />
+                Campanhas
+              </Button>
+            )}
             {isFullyConnected && (
               <EnabledServicesDialog
                 tenantSlug={tenantSlug}

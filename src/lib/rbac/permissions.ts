@@ -28,6 +28,9 @@ export const PERMISSIONS = [
   { code: "whatsapp.view", category: "whatsapp", description: "Ver conexões WhatsApp" },
   { code: "whatsapp.manage", category: "whatsapp", description: "Conectar, testar, enviar mensagens e remover conexões WhatsApp" },
 
+  { code: "campaigns.view", category: "campaigns", description: "Ver contatos, listas e campanhas de disparo em massa" },
+  { code: "campaigns.manage", category: "campaigns", description: "Sincronizar contatos, criar listas e criar/iniciar/pausar/cancelar campanhas" },
+
   { code: "settings.view", category: "settings", description: "Ver configurações" },
   { code: "settings.manage", category: "settings", description: "Alterar configurações" },
 

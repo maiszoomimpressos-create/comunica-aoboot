@@ -38,6 +38,6 @@ export const WHATSAPP_PRODUCTS: WhatsappProduct[] = [
     key: "campanhas",
     name: "Campanhas",
     description: "Envios em massa segmentados pra sua base de clientes.",
-    available: false,
+    available: true,
   },
 ];

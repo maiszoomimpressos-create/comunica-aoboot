@@ -47,3 +47,17 @@ export interface ContactNameResult {
    * formatted-phone-number fallback (see ZApiProvider.getContactName). */
   name?: string;
 }
+
+export interface ProviderContact {
+  phone: string;
+  /** Only ever a real, human-set name — same "not a formatted phone
+   * number" filtering as ContactNameResult, applied per-entry. */
+  name?: string;
+}
+
+export interface ListContactsResult {
+  ok: boolean;
+  contacts: ProviderContact[];
+  message: string;
+  raw?: unknown;
+}

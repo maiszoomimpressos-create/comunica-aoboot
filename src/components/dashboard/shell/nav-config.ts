@@ -8,6 +8,7 @@ import {
   Plug,
   CreditCard,
   Settings,
+  Send,
 } from "lucide-react";
 import type { PermissionCode } from "@/lib/rbac/permissions";
 
@@ -23,6 +24,12 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Dashboard",
     href: (slug) => `/app/${slug}/dashboard`,
     icon: LayoutDashboard,
+  },
+  {
+    label: "Campanhas",
+    href: (slug) => `/app/${slug}/modulos/whatsapp/campanhas`,
+    icon: Send,
+    permission: "campaigns.view",
   },
   {
     label: "Minha Empresa",
