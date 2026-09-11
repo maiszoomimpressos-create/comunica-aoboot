@@ -35,43 +35,47 @@ export function ListMembersTable({
   }
 
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Nome</TableHead>
-          <TableHead>Telefone</TableHead>
-          <TableHead>Status</TableHead>
-          {canManage && <TableHead className="text-right">Ações</TableHead>}
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {members.map((member) => (
-          <TableRow key={member.contactId}>
-            <TableCell>{member.name ?? <span className="text-muted-foreground">—</span>}</TableCell>
-            <TableCell>{member.phone}</TableCell>
-            <TableCell>
-              {member.optedOut ? (
-                <Badge variant="destructive">Opt-out</Badge>
-              ) : (
-                <Badge variant="secondary">Ativo</Badge>
-              )}
-            </TableCell>
-            {canManage && (
-              <TableCell className="text-right">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={pendingId === member.contactId}
-                  onClick={() => handleRemove(member.contactId)}
-                >
-                  <X className="size-4" />
-                  Remover
-                </Button>
-              </TableCell>
-            )}
+    // Same fixed-height scroll container + sticky header as ContactsTable —
+    // a list can also grow into the thousands once campaigns are big.
+    <div className="max-h-[65vh] overflow-y-auto rounded-lg border border-border">
+      <Table>
+        <TableHeader className="sticky top-0 z-10 bg-background">
+          <TableRow>
+            <TableHead>Nome</TableHead>
+            <TableHead>Telefone</TableHead>
+            <TableHead>Status</TableHead>
+            {canManage && <TableHead className="text-right">Ações</TableHead>}
           </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+        </TableHeader>
+        <TableBody>
+          {members.map((member) => (
+            <TableRow key={member.contactId}>
+              <TableCell>{member.name ?? <span className="text-muted-foreground">—</span>}</TableCell>
+              <TableCell>{member.phone}</TableCell>
+              <TableCell>
+                {member.optedOut ? (
+                  <Badge variant="destructive">Opt-out</Badge>
+                ) : (
+                  <Badge variant="secondary">Ativo</Badge>
+                )}
+              </TableCell>
+              {canManage && (
+                <TableCell className="text-right">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={pendingId === member.contactId}
+                    onClick={() => handleRemove(member.contactId)}
+                  >
+                    <X className="size-4" />
+                    Remover
+                  </Button>
+                </TableCell>
+              )}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
   );
 }
