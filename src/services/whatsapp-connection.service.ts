@@ -6,7 +6,7 @@ import { generateWebhookSecret } from "@/lib/whatsapp/webhook-secret";
 import { getWhatsappProvider } from "@/lib/whatsapp/registry";
 import { WHATSAPP_PRODUCTS } from "@/config/whatsapp-products";
 import { getNotificationType, type NotificationDetails } from "@/config/whatsapp-notification-types";
-import { isValidServiceKey } from "@/config/whatsapp-services";
+import { isValidServiceKey, getServiceLabel } from "@/config/whatsapp-services";
 import type {
   QrCodeResult,
   SendMessageResult,
@@ -474,9 +474,11 @@ export async function sendPurchaseConfirmation(
 ): Promise<SendMessageResult> {
   const connection = await getConnectionByApiKeyHash(hashApiKey(apiKeyPlaintext));
   if (!connection) throw new UnauthorizedError("Chave de API inválida.");
-  if (!connection.enabledServices.includes("purchase_confirmation")) {
+
+  const notificationType = getNotificationType(input.type);
+  if (!connection.enabledServices.includes(notificationType.serviceKey)) {
     throw new ForbiddenError(
-      "Este serviço (Confirmação de compra / ingresso) não está habilitado para esta conexão."
+      `Este serviço (${getServiceLabel(notificationType.serviceKey)}) não está habilitado para esta conexão.`
     );
   }
   if (connection.status !== "CONNECTED") {
@@ -486,7 +488,6 @@ export async function sendPurchaseConfirmation(
     throw new ConflictError("Esta conexão não está totalmente configurada.");
   }
 
-  const notificationType = getNotificationType(input.type);
   const details = input.details ?? {};
   const missingDetails = notificationType.requiredDetailKeys.filter((key) => !details[key]?.trim());
   if (missingDetails.length > 0) {

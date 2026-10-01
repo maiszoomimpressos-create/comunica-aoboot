@@ -35,10 +35,30 @@ export const WHATSAPP_SERVICES: WhatsappServiceDef[] = [
     description: "Avisa os números cadastrados quando seu sistema externo reporta saldo baixo.",
     endpoint: "POST /api/v1/whatsapp/balance-alert",
   },
+  {
+    key: "verification_code",
+    label: "Código de verificação (2FA)",
+    description:
+      "Manda um código de confirmação (ex: 2º fator de acesso a um terminal/painel). Mesmo endpoint de purchase-confirmation, type: \"codigo_verificacao\".",
+    endpoint: "POST /api/v1/whatsapp/purchase-confirmation",
+  },
 ];
 
+// Opt-in — ao contrário de purchase_confirmation (que já vinha ligado pra
+// não quebrar quem já integrava antes deste catálogo existir), todo serviço
+// novo daqui pra frente nasce desligado: o tenant precisa habilitar
+// explicitamente antes do caller conseguir usá-lo.
 export const DEFAULT_ENABLED_SERVICES = ["purchase_confirmation"];
 
 export function isValidServiceKey(key: string): boolean {
   return WHATSAPP_SERVICES.some((s) => s.key === key);
+}
+
+/** Resolves a service key to its display label — used to build a specific
+ * "este serviço (X) não está habilitado" message per notification type,
+ * instead of a message hardcoded to purchase_confirmation's label. Falls
+ * back to the raw key if somehow unknown (should never happen — every
+ * NotificationTypeDef.serviceKey must point at a real entry here). */
+export function getServiceLabel(key: string): string {
+  return WHATSAPP_SERVICES.find((s) => s.key === key)?.label ?? key;
 }

@@ -38,6 +38,12 @@ export interface NotificationTypeDef {
   label: string;
   requiresQr: boolean;
   requiredDetailKeys: string[];
+  /** Which WHATSAPP_SERVICES key gates this type (see whatsapp-services.ts)
+   * — checked in sendPurchaseConfirmation before anything else. Lets a
+   * notification type live on its own opt-in toggle instead of inheriting
+   * purchase_confirmation's, for types that aren't actually about a
+   * purchase (e.g. codigo_verificacao). */
+  serviceKey: string;
   buildMessage(input: BuildMessageInput): string;
 }
 
@@ -93,6 +99,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     label: "Compra confirmada",
     requiresQr: false,
     requiredDetailKeys: [],
+    serviceKey: "purchase_confirmation",
     buildMessage: ({ whatsappName, recipientName, businessName }) =>
       `${greet(whatsappName)} O pedido comprado em ${businessName}, por ${bold(recipientName)}, foi aprovado com sucesso.`,
   },
@@ -108,6 +115,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     // correspondente some quando vêm vazios, ver formatEventDateTime /
     // formatLocation).
     requiredDetailKeys: ["nome_evento", "ingresso"],
+    serviceKey: "purchase_confirmation",
     buildMessage: ({ whatsappName, recipientName, businessName, details }) => {
       const lines = [
         greet(whatsappName),
@@ -132,6 +140,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     // venda (junto com o ingresso, depois pelo site, ou avulso na hora do
     // portão) — mesma estrutura de dados nos três, só muda quem dispara.
     requiredDetailKeys: ["local", "placa", "cor", "modelo", "data", "horario"],
+    serviceKey: "purchase_confirmation",
     buildMessage: ({ whatsappName, recipientName, details }) =>
       `${greet(whatsappName)}\n\nSeu comprovante de estacionamento em ${bold(details.local)} foi aprovado com sucesso.\n\n🚗 ${details.modelo} - ${details.cor} - Placa ${details.placa}\n📅 ${details.data} às ${details.horario}\n\nComprado por: ${bold(recipientName)}`,
   },
@@ -145,6 +154,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     // diferente do da compra: é o que libera a SAÍDA do veículo depois,
     // não a entrada.
     requiredDetailKeys: ["local", "placa", "cor", "modelo", "horario"],
+    serviceKey: "purchase_confirmation",
     buildMessage: ({ whatsappName, details }) =>
       `${greet(whatsappName)}\n\nSeu veículo ${bold(`${details.modelo} - ${details.cor} - Placa ${details.placa}`)} entrou no estacionamento ${bold(details.local)} às ${details.horario}.\n\nGuarde este QR code — você vai precisar apresentá-lo na saída para liberar o veículo.`,
   },
@@ -153,6 +163,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     label: "Entrada na lista de espera",
     requiresQr: false,
     requiredDetailKeys: [],
+    serviceKey: "purchase_confirmation",
     buildMessage: ({ whatsappName, businessName }) =>
       `${greet(whatsappName)} Você entrou na lista de espera em ${businessName}. Assim que houver uma vaga, avisamos por aqui.`,
   },
@@ -161,6 +172,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     label: "Agendamento confirmado",
     requiresQr: false,
     requiredDetailKeys: ["data", "horario"],
+    serviceKey: "purchase_confirmation",
     buildMessage: ({ whatsappName, businessName, details }) =>
       `${greet(whatsappName)} Seu agendamento em ${businessName} foi confirmado para ${details.data} às ${details.horario}.`,
   },
@@ -180,6 +192,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     // for special behavior.
     requiresQr: false,
     requiredDetailKeys: ["evento"],
+    serviceKey: "purchase_confirmation",
     buildMessage: ({ whatsappName, businessName, details }) =>
       [greet(whatsappName), "", details.evento, "", businessName].join("\n"),
   },
@@ -194,12 +207,26 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     // Não usa `businessName` de propósito: o contexto aqui é "novo app
     // disponível", não uma compra feita numa empresa.
     requiredDetailKeys: ["link"],
+    serviceKey: "purchase_confirmation",
     buildMessage: ({ whatsappName, details }) => {
       const lines = [greet(whatsappName), "", "Uma nova versão do app está disponível para download:"];
       if (details.versao?.trim()) lines.push(`Versão: ${bold(details.versao.trim())}`);
       lines.push(details.link);
       return lines.join("\n");
     },
+  },
+  {
+    key: "codigo_verificacao",
+    label: "Código de verificação (2FA)",
+    // Segundo fator de acesso a um painel/menu administrativo (ex: terminal
+    // físico Tipo7 GPOS780) — não é uma confirmação de compra, por isso vive
+    // no próprio serviço "verification_code" em vez de herdar
+    // purchase_confirmation (ver whatsapp-services.ts).
+    requiresQr: false,
+    requiredDetailKeys: ["codigo"],
+    serviceKey: "verification_code",
+    buildMessage: ({ details }) =>
+      `Seu código de acesso ao terminal Tipo7 é ${bold(details.codigo)}. Válido por 5 minutos, não compartilhe com ninguém.`,
   },
 ];
 
