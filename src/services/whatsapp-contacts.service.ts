@@ -94,8 +94,13 @@ export async function syncContactsFromConnection(
     connection.phoneNumber,
     `Contatos de ${connection.phoneNumber}`
   );
-  const activeContacts = await listContactsForConnection(tenantId, connectionId);
-  const activeContactIds = activeContacts.filter((c) => !c.optedOut).map((c) => c.id);
+  // Só os contatos deste número (não "todo contato já sincronizado nessa
+  // conexão", que pode incluir agendas de números anteriores pareados na
+  // mesma conexão — ver getOrCreateExtractedListForConnection).
+  const connectionContacts = await listContactsForConnection(tenantId, connectionId);
+  const activeContactIds = connectionContacts
+    .filter((c) => !c.optedOut && c.originPhoneNumber === connection.phoneNumber)
+    .map((c) => c.id);
   if (activeContactIds.length > 0) {
     await addContactsToListRepo(tenantId, extractedList.id, activeContactIds);
   }

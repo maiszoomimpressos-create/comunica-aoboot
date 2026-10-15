@@ -6,9 +6,14 @@ import {
   addContactsToList as addContactsToListRepo,
   getOrCreateExtractedListForGroup,
   getOrCreateExtractedListForConnection,
+  getListSummary,
 } from "@/repositories/contact-list.repository";
-import { ConflictError } from "@/lib/server/errors";
-import { requireConnectedConnection } from "./whatsapp-contacts.service";
+import { ConflictError, NotFoundError } from "@/lib/server/errors";
+import {
+  requireConnectedConnection,
+  syncContactsFromConnection,
+  type SyncContactsResult,
+} from "./whatsapp-contacts.service";
 
 /** Every WhatsApp group the connection participates in — fetched live from
  * the provider on each call (not persisted; groups a tenant belongs to can
@@ -113,4 +118,35 @@ export async function syncContactsFromGroup(
     listId: groupList.id,
     listName: groupList.name,
   };
+}
+
+/** Resincroniza uma lista extraída já existente (botão direto na própria
+ * lista, na aba "Listas") — sem precisar passar pela aba Contatos. Exige
+ * que a conexão esteja pareada EXATAMENTE com o número que originou essa
+ * lista (originPhoneNumber carimbado nela): se o número pareado agora for
+ * outro, o sync cairia nos contatos errados (ou criaria uma lista nova em
+ * vez de atualizar esta, ver getOrCreateExtractedListForConnection), então
+ * falha com uma mensagem clara em vez disso. */
+export async function syncExtractedList(tenantId: string, listId: string): Promise<SyncContactsResult> {
+  const list = await getListSummary(tenantId, listId);
+  if (!list) throw new NotFoundError("Lista não encontrada.");
+  if (list.type !== "EXTRACTED" || !list.connectionId || !list.originPhoneNumber) {
+    throw new ConflictError("Só listas extraídas de um número podem ser sincronizadas por aqui.");
+  }
+
+  const connection = await requireConnectedConnection(tenantId, list.connectionId);
+  if (connection.phoneNumber !== list.originPhoneNumber) {
+    throw new ConflictError(
+      `Essa lista é do número ${list.originPhoneNumber}, mas a conexão está pareada com o número ` +
+        `${connection.phoneNumber} agora. Pareie o número certo (ou ajuste o número da conexão) antes ` +
+        "de sincronizar esta lista."
+    );
+  }
+
+  if (list.sourceGroupId) {
+    const result = await syncContactsFromGroup(tenantId, list.connectionId, list.sourceGroupId, list.name);
+    return { total: result.total, created: result.created, updated: result.updated };
+  }
+
+  return syncContactsFromConnection(tenantId, list.connectionId);
 }
