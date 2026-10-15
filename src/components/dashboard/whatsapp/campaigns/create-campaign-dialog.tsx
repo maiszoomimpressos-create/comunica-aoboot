@@ -107,7 +107,9 @@ export function CreateCampaignDialog({
           <DialogTitle>Nova campanha</DialogTitle>
           <DialogDescription>
             Cria a campanha como rascunho, com um destinatário por contato ativo da lista escolhida
-            neste momento — o ritmo de envio usa a configuração de disparo da conexão.
+            neste momento. O envio sempre sai por este número, mesmo pra uma lista extraída de outra
+            conexão ou montada com contatos de vários números — o ritmo de envio usa a configuração de
+            disparo desta conexão.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit(onSubmit)} noValidate>
@@ -132,6 +134,7 @@ export function CreateCampaignDialog({
                       {eligibleLists.map((list) => (
                         <SelectItem key={list.id} value={list.id}>
                           {list.name} ({list.memberCount})
+                          {list.type === "EXTRACTED" ? ` · de ${list.originPhoneNumber}` : " · montada"}
                         </SelectItem>
                       ))}
                     </SelectContent>

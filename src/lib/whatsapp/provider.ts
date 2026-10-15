@@ -1,6 +1,8 @@
 import type {
   ContactNameResult,
+  GroupParticipantsResult,
   ListContactsResult,
+  ListGroupsResult,
   QrCodeResult,
   SendMessageResult,
   TestConnectionResult,
@@ -59,4 +61,16 @@ export interface WhatsappProvider {
    * never blocks a send — a name just isn't included in the greeting when
    * unavailable. */
   getContactName(config: WhatsappConnectionConfig, phone: string): Promise<ContactNameResult>;
+  /** Every group the connected WhatsApp participates in — feeds the
+   * "sincronizar de um grupo" picker (see whatsapp-groups.service.ts).
+   * Never throws, same convention as every other provider method. */
+  listGroups(config: WhatsappConnectionConfig): Promise<ListGroupsResult>;
+  /** A specific group's member list (phone + best-effort name) — used to
+   * seed `Contact` rows and a dedicated extracted list for that group,
+   * same idea as `listContacts` but scoped to one group instead of the
+   * whole address book. */
+  getGroupParticipants(
+    config: WhatsappConnectionConfig,
+    groupId: string
+  ): Promise<GroupParticipantsResult>;
 }

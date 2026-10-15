@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Trash2, Users, Download } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -24,15 +25,10 @@ import type { ContactListSummary } from "@/repositories/contact-list.repository"
 export function ContactListCard({
   tenantSlug,
   list,
-  /** The WhatsApp number contacts in this list were synced from — always
-   * the connection the list belongs to, read-only (a list can't be moved
-   * to a different connection, unlike its name). */
-  connectionPhoneNumber,
   canManage,
 }: {
   tenantSlug: string;
   list: ContactListSummary;
-  connectionPhoneNumber: string;
   canManage: boolean;
 }) {
   const router = useRouter();
@@ -45,7 +41,9 @@ export function ContactListCard({
     router.refresh();
   }
 
-  const listHref = `/app/${tenantSlug}/modulos/whatsapp/campanhas/${list.connectionId}/listas/${list.id}`;
+  // Rota única de detalhe de lista, independente do número que a originou
+  // (ou da ausência de um, no caso de uma lista montada).
+  const listHref = `/app/${tenantSlug}/modulos/whatsapp/listas/${list.id}`;
 
   return (
     <Card className="flex items-center justify-between gap-4 p-4">
@@ -54,9 +52,31 @@ export function ContactListCard({
           <Users className="size-4 text-primary" />
         </div>
         <div className="min-w-0">
-          <p className="truncate font-medium">{list.name}</p>
+          <div className="flex items-center gap-2">
+            {/* min-w-0: sem isso um nome sem espaço (grupo sem título vira
+            o próprio id, tipo "12036...-group") não encolhe e estoura o
+            card/modal. */}
+            <p className="min-w-0 truncate font-medium">{list.name}</p>
+            {list.type === "ASSEMBLED" && (
+              <Badge variant="secondary" className="shrink-0">
+                Montada
+              </Badge>
+            )}
+            {list.sourceGroupId && (
+              <Badge variant="secondary" className="shrink-0">
+                Grupo
+              </Badge>
+            )}
+          </div>
           <p className="text-sm text-muted-foreground">
-            {list.memberCount} contato(s) · de {connectionPhoneNumber}
+            {list.memberCount === 0 ? (
+              "Sem contatos ainda — clique para adicionar"
+            ) : (
+              <>
+                {list.memberCount} contato(s)
+                {list.type === "EXTRACTED" ? ` · de ${list.originPhoneNumber}` : " · vários números"}
+              </>
+            )}
           </p>
         </div>
       </Link>

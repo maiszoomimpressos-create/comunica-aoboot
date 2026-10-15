@@ -114,8 +114,13 @@ export async function createCampaign(tenantId: string, input: CreateCampaignInpu
   const connection = await getConnectionSummary(tenantId, input.connectionId);
   if (!connection) throw new NotFoundError("Conexão não encontrada.");
 
+  // Qualquer lista do tenant pode ser usada, mesmo que os contatos tenham
+  // sido extraídos de outro número (ou de vários, numa lista montada) — o
+  // WhatsApp manda mensagem pra qualquer telefone a partir de qualquer
+  // sessão conectada, então quem envia é sempre a conexão escolhida aqui
+  // (input.connectionId), nunca a origem de cada contato.
   const list = await getListSummary(tenantId, input.listId);
-  if (!list || list.connectionId !== input.connectionId) throw new NotFoundError("Lista não encontrada.");
+  if (!list) throw new NotFoundError("Lista não encontrada.");
 
   const members = await listMembersOfList(tenantId, input.listId);
   const contactIds = members.filter((m) => !m.optedOut).map((m) => m.contactId);

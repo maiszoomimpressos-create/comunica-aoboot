@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
 import { getListDetail } from "@/services/whatsapp-contacts.service";
-import { getConnectionSummary } from "@/repositories/channel-connection.repository";
 import { NotFoundError } from "@/lib/server/errors";
 import { toCsv } from "@/lib/csv";
 
@@ -12,10 +11,12 @@ import { toCsv } from "@/lib/csv";
  * browser-triggered file download (Content-Disposition), which actions
  * can't produce directly. Same auth/permission check as the page itself
  * (campaigns.view is enough — this is a read, not a management action).
+ * "Número de origem" vem de cada membro (não da lista) porque uma lista
+ * montada pode misturar contatos de números diferentes.
  */
 export async function GET(
   _request: Request,
-  { params }: { params: Promise<{ tenantSlug: string; connectionId: string; listId: string }> }
+  { params }: { params: Promise<{ tenantSlug: string; listId: string }> }
 ) {
   const { tenantSlug, listId } = await params;
   const ctx = await getRequestContext(tenantSlug);
@@ -27,12 +28,9 @@ export async function GET(
   });
   if (!detail) return NextResponse.json({ error: "not found" }, { status: 404 });
 
-  const connection = await getConnectionSummary(ctx.tenantId, detail.list.connectionId);
-  const originPhone = connection?.phoneNumber ?? "";
-
   const rows: string[][] = [
     ["Nome", "Telefone", "Lista", "Número de origem"],
-    ...detail.members.map((m) => [m.name ?? "", m.phone, detail.list.name, originPhone]),
+    ...detail.members.map((m) => [m.name ?? "", m.phone, detail.list.name, m.originPhoneNumber]),
   ];
 
   const filename = `${detail.list.name.replace(/[^\p{L}\p{N}_-]+/gu, "_")}.csv`;

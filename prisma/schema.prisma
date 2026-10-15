@@ -495,6 +495,15 @@ model Contact {
   connectionId String
   connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
+  // Número que estava pareado nesta conexão no momento em que este contato
+  // foi sincronizado — carimbado aqui (não lido ao vivo de
+  // connection.phoneNumber) porque o mesmo connectionId pode ser reutilizado
+  // pra extrair agendas de números diferentes ao longo do tempo (ver
+  // getOrCreateExtractedListForConnection); sem o carimbo, trocar o número
+  // pareado/editar o campo da conexão reescreveria a origem de contatos já
+  // sincronizados antes.
+  originPhoneNumber String
+
   listMemberships    ContactListMember[]
   campaignRecipients CampaignRecipient[]
 
@@ -503,21 +512,50 @@ model Contact {
   @@map("contact")
 }
 
+enum ContactListType {
+  // Nasce vinculada a um número (connectionId fixo, não editável depois de
+  // criada) — é o resultado de "puxar" os contatos sincronizados de uma
+  // conexão específica.
+  EXTRACTED
+  // Não pertence a nenhum número — montada à mão pelo tenant escolhendo
+  // contatos de uma ou mais listas extraídas (possivelmente de números
+  // diferentes). connectionId é sempre null nesse tipo.
+  ASSEMBLED
+}
+
 model ContactList {
-  id        String   @id @default(cuid())
+  id        String          @id @default(cuid())
   name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  type      ContactListType @default(EXTRACTED)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
 
   tenantId     String
   organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  connectionId String
-  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  // null para listas ASSEMBLED — só listas EXTRACTED têm número de origem.
+  connectionId String?
+  connection   ChannelConnection? @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  // JID do grupo (ex: "1202...-group") quando esta lista extraída veio de
+  // "sincronizar de um grupo" em vez da agenda inteira do número — null
+  // pra lista extraída "normal" (agenda toda) e sempre null pra ASSEMBLED.
+  // Junto com o índice único abaixo, garante no máximo uma lista por grupo
+  // por conexão (re-sincronizar o mesmo grupo atualiza a mesma lista).
+  sourceGroupId String?
+
+  // Carimbo do número pareado no momento da extração — mesma razão do
+  // Contact.originPhoneNumber (ver ali). Null pra ASSEMBLED, sempre
+  // preenchido pra EXTRACTED. Junto com connectionId (e sourceGroupId pra
+  // listas de grupo), é o que diferencia "a mesma conexão, mas um número
+  // diferente pareado depois" como uma lista nova em vez de reaproveitar a
+  // antiga.
+  originPhoneNumber String?
 
   members   ContactListMember[]
   campaigns Campaign[]
 
+  @@unique([connectionId, sourceGroupId])
   @@index([tenantId, connectionId])
   @@map("contact_list")
 }

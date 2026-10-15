@@ -7,16 +7,19 @@ import {
 } from "@/repositories/channel-connection.repository";
 import {
   listContactsForConnection,
-  countContactsForConnection,
+  listContactsForList,
   listContactsNotInList,
+  listContactsNotInListForTenant,
   upsertSyncedContacts,
   setContactOptOut,
   type ContactRow,
 } from "@/repositories/contact.repository";
 import {
   listListsForConnection,
+  listListsForTenant,
   getListSummary,
-  createList,
+  createAssembledList,
+  getOrCreateExtractedListForConnection,
   renameList,
   deleteList,
   listMembersOfList,
@@ -32,7 +35,7 @@ import { ConflictError, NotFoundError, ValidationError } from "@/lib/server/erro
  * connection-scoped feature (send message, QR code, ...) already throws —
  * Campanhas re-checks CONNECTED here for the same reason
  * sendPurchaseConfirmation does: no point calling the provider otherwise. */
-async function requireConnectedConnection(tenantId: string, connectionId: string) {
+export async function requireConnectedConnection(tenantId: string, connectionId: string) {
   const connection = await getConnectionWithSecret(tenantId, connectionId);
   if (!connection) throw new NotFoundError("Conexão não encontrada.");
   if (!connection.apiUrl || !connection.apiTokenCipher) {
@@ -54,7 +57,12 @@ export interface SyncContactsResult {
  * upserts them as `Contact` rows — the only supported source for now (see
  * campaigns module plan; manual add / CSV import are future work). Never
  * touches `optedOut` on existing contacts (upsertSyncedContacts's own
- * contract) — a re-sync can never silently undo an opt-out. */
+ * contract) — a re-sync can never silently undo an opt-out.
+ *
+ * Also keeps this connection's lista extraída (uma só, criada
+ * automaticamente aqui na primeira vez) em dia com todo contato ativo dela
+ * — o usuário não cria essa lista à mão, ela só aparece em "Listas" depois
+ * de sincronizar. */
 export async function syncContactsFromConnection(
   tenantId: string,
   connectionId: string
@@ -76,21 +84,49 @@ export async function syncContactsFromConnection(
   const { created, updated } = await upsertSyncedContacts(
     tenantId,
     connectionId,
+    connection.phoneNumber,
     result.contacts.map((c) => ({ phone: c.phone, name: c.name }))
   );
+
+  const extractedList = await getOrCreateExtractedListForConnection(
+    tenantId,
+    connectionId,
+    connection.phoneNumber,
+    `Contatos de ${connection.phoneNumber}`
+  );
+  const activeContacts = await listContactsForConnection(tenantId, connectionId);
+  const activeContactIds = activeContacts.filter((c) => !c.optedOut).map((c) => c.id);
+  if (activeContactIds.length > 0) {
+    await addContactsToListRepo(tenantId, extractedList.id, activeContactIds);
+  }
 
   return { total: result.contacts.length, created, updated };
 }
 
-export async function getContactsOverview(
+export interface ContactsByListEntry {
+  list: ContactListSummary;
+  contacts: ContactRow[];
+}
+
+/** Contatos desta conexão agrupados por lista extraída (a da agenda inteira
+ * + uma por grupo sincronizado) — feeds a aba Contatos, que mostra um bloco
+ * retrátil por lista em vez de uma tabela única com tudo misturado. Um
+ * contato que está em mais de uma lista (ex: participante de grupo que
+ * também está na agenda) aparece em cada bloco correspondente. */
+export async function getContactsGroupedByList(
   tenantId: string,
   connectionId: string
-): Promise<{ contacts: ContactRow[]; activeCount: number }> {
-  const [contacts, activeCount] = await Promise.all([
-    listContactsForConnection(tenantId, connectionId),
-    countContactsForConnection(tenantId, connectionId),
-  ]);
-  return { contacts, activeCount };
+): Promise<ContactsByListEntry[]> {
+  const lists = await listListsForConnection(tenantId, connectionId);
+  // Agenda inteira (sourceGroupId null) primeiro, grupos depois.
+  const sorted = [...lists].sort((a, b) => Number(!!a.sourceGroupId) - Number(!!b.sourceGroupId));
+
+  return Promise.all(
+    sorted.map(async (list) => ({
+      list,
+      contacts: await listContactsForList(tenantId, list.id),
+    }))
+  );
 }
 
 export async function setContactOptOutStatus(
@@ -108,10 +144,17 @@ export function getListsForConnection(tenantId: string, connectionId: string): P
   return listListsForConnection(tenantId, connectionId);
 }
 
-export async function createContactList(tenantId: string, connectionId: string, name: string) {
+/** Todas as listas do tenant — extraídas de qualquer número + montadas.
+ * Usado pela página central "Listas" e pelo seletor de lista da campanha
+ * (que pode disparar pra qualquer lista, não só as do número atual). */
+export function getListsForTenant(tenantId: string): Promise<ContactListSummary[]> {
+  return listListsForTenant(tenantId);
+}
+
+export async function createAssembledContactList(tenantId: string, name: string) {
   const trimmed = name.trim();
   if (!trimmed) throw new ValidationError("Informe um nome para a lista.");
-  return createList(tenantId, connectionId, trimmed);
+  return createAssembledList(tenantId, trimmed);
 }
 
 export async function renameContactList(tenantId: string, listId: string, name: string) {
@@ -137,24 +180,33 @@ export async function deleteContactList(tenantId: string, listId: string) {
 }
 
 export interface ListDetail {
-  list: { id: string; name: string; connectionId: string };
+  list: { id: string; name: string; type: "EXTRACTED" | "ASSEMBLED"; connectionId: string | null };
   members: ListMemberRow[];
   availableContacts: ContactRow[];
 }
 
+/** Contatos elegíveis pra entrar numa lista: só os do próprio número, pra
+ * uma extraída; qualquer número do tenant, pra uma montada. */
+function listEligibleContacts(tenantId: string, connectionId: string | null, listId: string) {
+  return connectionId
+    ? listContactsNotInList(tenantId, connectionId, listId)
+    : listContactsNotInListForTenant(tenantId, listId);
+}
+
 /** Everything the list-detail screen needs in one call: current members +
- * the connection's contacts not yet on this list (the "add" picker). */
+ * the contacts not yet on this list (the "add" picker) — scoped to one
+ * número numa lista extraída, ao tenant inteiro numa lista montada. */
 export async function getListDetail(tenantId: string, listId: string): Promise<ListDetail> {
   const list = await getListSummary(tenantId, listId);
   if (!list) throw new NotFoundError("Lista não encontrada.");
 
   const [members, availableContacts] = await Promise.all([
     listMembersOfList(tenantId, listId),
-    listContactsNotInList(tenantId, list.connectionId, listId),
+    listEligibleContacts(tenantId, list.connectionId, listId),
   ]);
 
   return {
-    list: { id: list.id, name: list.name, connectionId: list.connectionId },
+    list: { id: list.id, name: list.name, type: list.type, connectionId: list.connectionId },
     members,
     availableContacts,
   };
@@ -174,7 +226,7 @@ export async function addContactsToList(
   const list = await getListSummary(tenantId, listId);
   if (!list) throw new NotFoundError("Lista não encontrada.");
 
-  const eligible = await listContactsNotInList(tenantId, list.connectionId, listId);
+  const eligible = await listEligibleContacts(tenantId, list.connectionId, listId);
   const eligibleIds = new Set(eligible.map((c) => c.id));
   const toAdd = contactIds.filter((id) => eligibleIds.has(id));
 

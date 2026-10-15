@@ -61,3 +61,30 @@ export interface ListContactsResult {
   message: string;
   raw?: unknown;
 }
+
+export interface ProviderGroup {
+  /** WhatsApp's own group JID, e.g. "120263358412332916-group" — opaque
+   * identifier, used as-is to fetch the group's participants later. */
+  id: string;
+  name: string;
+}
+
+export interface ListGroupsResult {
+  ok: boolean;
+  groups: ProviderGroup[];
+  message: string;
+  raw?: unknown;
+}
+
+export interface GroupParticipant {
+  phone: string;
+  /** Only ever a real, human-set name — same filtering as ProviderContact. */
+  name?: string;
+}
+
+export interface GroupParticipantsResult {
+  ok: boolean;
+  participants: GroupParticipant[];
+  message: string;
+  raw?: unknown;
+}

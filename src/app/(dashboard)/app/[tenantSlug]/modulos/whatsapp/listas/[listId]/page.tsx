@@ -6,6 +6,7 @@ import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
 import { getListDetail } from "@/services/whatsapp-contacts.service";
 import { NotFoundError } from "@/lib/server/errors";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AddContactsDialog } from "@/components/dashboard/whatsapp/campaigns/add-contacts-dialog";
 import { ListMembersTable } from "@/components/dashboard/whatsapp/campaigns/list-members-table";
@@ -15,9 +16,9 @@ export const metadata: Metadata = { title: "Lista de contatos" };
 export default async function ContactListDetailPage({
   params,
 }: {
-  params: Promise<{ tenantSlug: string; connectionId: string; listId: string }>;
+  params: Promise<{ tenantSlug: string; listId: string }>;
 }) {
-  const { tenantSlug, connectionId, listId } = await params;
+  const { tenantSlug, listId } = await params;
   const ctx = await getRequestContext(tenantSlug);
   requirePermission(ctx, "campaigns.view");
   const canManage = ctx.permissions.includes("campaigns.manage");
@@ -35,16 +36,19 @@ export default async function ContactListDetailPage({
   return (
     <div className="max-w-3xl space-y-6">
       <Link
-        href={`/app/${tenantSlug}/modulos/whatsapp/campanhas/${connectionId}`}
+        href={`/app/${tenantSlug}/modulos/whatsapp/campanhas?tab=listas`}
         className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
       >
         <ArrowLeft className="size-4" />
-        Campanhas
+        Listas
       </Link>
 
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{list.name}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">{list.name}</h1>
+            {list.type === "ASSEMBLED" && <Badge variant="secondary">Montada</Badge>}
+          </div>
           <p className="text-muted-foreground">{members.length} contato(s) nesta lista.</p>
         </div>
         <div className="flex gap-2">
@@ -52,7 +56,7 @@ export default async function ContactListDetailPage({
             variant="outline"
             size="sm"
             nativeButton={false}
-            render={<a href={`/app/${tenantSlug}/modulos/whatsapp/campanhas/${connectionId}/listas/${listId}/export`} />}
+            render={<a href={`/app/${tenantSlug}/modulos/whatsapp/listas/${listId}/export`} />}
           >
             <Download className="size-4" />
             Baixar lista

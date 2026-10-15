@@ -43,6 +43,7 @@ export function ListMembersTable({
           <TableRow>
             <TableHead>Nome</TableHead>
             <TableHead>Telefone</TableHead>
+            <TableHead>Origem</TableHead>
             <TableHead>Status</TableHead>
             {canManage && <TableHead className="text-right">Ações</TableHead>}
           </TableRow>
@@ -52,6 +53,7 @@ export function ListMembersTable({
             <TableRow key={member.contactId}>
               <TableCell>{member.name ?? <span className="text-muted-foreground">—</span>}</TableCell>
               <TableCell>{member.phone}</TableCell>
+              <TableCell className="text-muted-foreground">{member.originPhoneNumber}</TableCell>
               <TableCell>
                 {member.optedOut ? (
                   <Badge variant="destructive">Opt-out</Badge>

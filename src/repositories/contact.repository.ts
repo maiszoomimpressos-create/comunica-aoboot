@@ -10,6 +10,11 @@ export interface ContactRow {
   optedOutSource: string | null;
   consentStatus: string;
   createdAt: Date;
+  connectionId: string;
+  // Número que sincronizou esse contato — sem uso na tabela de contatos de
+  // uma conexão só (é sempre o mesmo número), mas relevante no picker de
+  // "adicionar contatos" de uma lista montada, que mistura números.
+  originPhoneNumber: string;
 }
 
 const contactSelect = {
@@ -22,9 +27,11 @@ const contactSelect = {
   optedOutSource: true,
   consentStatus: true,
   createdAt: true,
+  connectionId: true,
+  originPhoneNumber: true,
 } as const;
 
-export function listContactsForConnection(tenantId: string, connectionId: string): Promise<ContactRow[]> {
+export async function listContactsForConnection(tenantId: string, connectionId: string): Promise<ContactRow[]> {
   return prisma.contact.findMany({
     where: { tenantId, connectionId },
     orderBy: { createdAt: "desc" },
@@ -36,13 +43,45 @@ export function countContactsForConnection(tenantId: string, connectionId: strin
   return prisma.contact.count({ where: { tenantId, connectionId, optedOut: false } });
 }
 
+/** Members of one specific list, as full `ContactRow`s (not the lighter
+ * `ListMemberRow` shape) — feeds the per-list collapsible sections on the
+ * Contatos tab, which reuses the same `ContactsTable` (opt-out toggle and
+ * all) already used for the flat view. */
+export async function listContactsForList(tenantId: string, listId: string): Promise<ContactRow[]> {
+  return prisma.contact.findMany({
+    where: { tenantId, listMemberships: { some: { listId } } },
+    orderBy: { createdAt: "desc" },
+    select: contactSelect,
+  });
+}
+
 /** Contacts of the connection not yet in a given list — feeds the "add to
- * list" picker so it never offers a contact already there. */
-export function listContactsNotInList(tenantId: string, connectionId: string, listId: string): Promise<ContactRow[]> {
+ * list" picker of a lista extraída, que só pode ganhar contatos do próprio
+ * número. */
+export async function listContactsNotInList(
+  tenantId: string,
+  connectionId: string,
+  listId: string
+): Promise<ContactRow[]> {
   return prisma.contact.findMany({
     where: {
       tenantId,
       connectionId,
+      optedOut: false,
+      listMemberships: { none: { listId } },
+    },
+    orderBy: { createdAt: "desc" },
+    select: contactSelect,
+  });
+}
+
+/** Mesma coisa, mas sem restringir a conexão — feeds the "add to list"
+ * picker of a lista montada, que pode juntar contatos de qualquer número do
+ * tenant. */
+export async function listContactsNotInListForTenant(tenantId: string, listId: string): Promise<ContactRow[]> {
+  return prisma.contact.findMany({
+    where: {
+      tenantId,
       optedOut: false,
       listMemberships: { none: { listId } },
     },
@@ -69,11 +108,12 @@ export interface SyncedContact {
 export async function upsertSyncedContacts(
   tenantId: string,
   connectionId: string,
+  originPhoneNumber: string,
   contacts: SyncedContact[]
 ): Promise<{ created: number; updated: number }> {
   const existing = await prisma.contact.findMany({
     where: { tenantId, connectionId },
-    select: { id: true, phone: true, name: true },
+    select: { id: true, phone: true, name: true, originPhoneNumber: true },
   });
   const existingByPhone = new Map(existing.map((c) => [c.phone, c]));
 
@@ -88,13 +128,28 @@ export async function upsertSyncedContacts(
         const found = existingByPhone.get(contact.phone);
         if (!found) {
           await prisma.contact.create({
-            data: { tenantId, connectionId, phone: contact.phone, name: contact.name, source: "sync" },
+            data: {
+              tenantId,
+              connectionId,
+              phone: contact.phone,
+              name: contact.name,
+              source: "sync",
+              originPhoneNumber,
+            },
           });
           created++;
           return;
         }
-        if (contact.name && contact.name !== found.name) {
-          await prisma.contact.update({ where: { id: found.id }, data: { name: contact.name } });
+        const nameChanged = !!contact.name && contact.name !== found.name;
+        const originChanged = found.originPhoneNumber !== originPhoneNumber;
+        if (nameChanged || originChanged) {
+          await prisma.contact.update({
+            where: { id: found.id },
+            data: {
+              ...(nameChanged ? { name: contact.name } : {}),
+              ...(originChanged ? { originPhoneNumber } : {}),
+            },
+          });
           updated++;
         }
       })

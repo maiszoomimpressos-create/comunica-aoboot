@@ -14,13 +14,21 @@ export const metadata: Metadata = { title: "Campanhas" };
  * for you when there's only one CONNECTED WhatsApp (the common case), shows
  * a picker when there's more than one, and points at /modulos/whatsapp when
  * there's none yet. Campaigns always live under a specific connection
- * (.../campanhas/[connectionId]) since pacing/settings are per-connection. */
+ * (.../campanhas/[connectionId]) since pacing/settings are per-connection —
+ * "Listas" lives there too, as a tab (tenant-wide content, but reached
+ * through whichever connection you're looking at). `?tab=` is forwarded so
+ * a link like "voltar pras listas" lands on the right tab. */
 export default async function CampaignsLandingPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ tenantSlug: string }>;
+  searchParams: Promise<{ tab?: string }>;
 }) {
   const { tenantSlug } = await params;
+  const { tab } = await searchParams;
+  const tabQuery = tab ? `?tab=${tab}` : "";
+
   const ctx = await getRequestContext(tenantSlug);
   requirePermission(ctx, "campaigns.view");
 
@@ -28,7 +36,7 @@ export default async function CampaignsLandingPage({
   const connected = connections.filter((c) => c.status === "CONNECTED");
 
   if (connected.length === 1) {
-    redirect(`/app/${tenantSlug}/modulos/whatsapp/campanhas/${connected[0].id}`);
+    redirect(`/app/${tenantSlug}/modulos/whatsapp/campanhas/${connected[0].id}${tabQuery}`);
   }
 
   if (connected.length === 0) {
@@ -63,7 +71,10 @@ export default async function CampaignsLandingPage({
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         {connected.map((connection) => (
-          <Link key={connection.id} href={`/app/${tenantSlug}/modulos/whatsapp/campanhas/${connection.id}`}>
+          <Link
+            key={connection.id}
+            href={`/app/${tenantSlug}/modulos/whatsapp/campanhas/${connection.id}${tabQuery}`}
+          >
             <Card className="flex items-center gap-3 p-4 hover:bg-muted/50">
               <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
                 <Send className="size-4 text-primary" />

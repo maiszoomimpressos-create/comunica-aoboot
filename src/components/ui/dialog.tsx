@@ -31,7 +31,7 @@ function DialogOverlay({
     <DialogPrimitive.Backdrop
       data-slot="dialog-overlay"
       className={cn(
-        "fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+        "fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-[open]:animate-in data-[open]:fade-in-0 data-[closed]:animate-out data-[closed]:fade-out-0",
         className
       )}
       {...props}
@@ -53,7 +53,20 @@ function DialogContent({
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          // max-h + overflow-y-auto: conteúdo que excede a altura da tela
+          // (lista longa, formulário grande, ...) rola dentro do próprio
+          // modal em vez de vazar pra fora dele ou empurrar a página.
+          // overflow-x-hidden é obrigatório junto — só declarar overflow-y
+          // faz o navegador computar overflow-x como "auto" também (regra
+          // do CSS), e qualquer texto sem espaço pra quebrar (um id de
+          // grupo, por exemplo) vira uma barra de rolagem horizontal que
+          // arrasta o modal inteiro junto. [&>*]:min-w-0 é o outro lado
+          // do mesmo problema: sendo um grid, cada filho direto por padrão
+          // calcula a própria largura mínima pelo conteúdo (min-width:auto
+          // de item de grid/flex) — sem isso, um filho com algo largo lá
+          // dentro (uma lista, uma tabela, ...) estufa a coluna do grid
+          // inteira, mesmo com overflow-x-hidden no container.
+          "fixed top-1/2 left-1/2 z-50 grid max-h-[85vh] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-x-hidden overflow-y-auto rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm [&>*]:min-w-0 data-[open]:animate-in data-[open]:fade-in-0 data-[open]:zoom-in-95 data-[closed]:animate-out data-[closed]:fade-out-0 data-[closed]:zoom-out-95",
           className
         )}
         {...props}

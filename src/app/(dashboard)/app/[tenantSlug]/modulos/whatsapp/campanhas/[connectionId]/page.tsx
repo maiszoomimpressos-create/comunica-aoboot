@@ -1,32 +1,40 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Users, List, Send } from "lucide-react";
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
 import {
   getConnectionForCampaigns,
-  getContactsOverview,
-  getListsForConnection,
+  getContactsGroupedByList,
+  getListsForTenant,
 } from "@/services/whatsapp-contacts.service";
 import { listCampaignsForConnection, getConnectionCampaignSettings } from "@/services/campaign.service";
 import { SyncContactsButton } from "@/components/dashboard/whatsapp/campaigns/sync-contacts-button";
-import { ContactsTable } from "@/components/dashboard/whatsapp/campaigns/contacts-table";
-import { CreateListDialog } from "@/components/dashboard/whatsapp/campaigns/create-list-dialog";
+import { SyncGroupDialog } from "@/components/dashboard/whatsapp/campaigns/sync-group-dialog";
+import { CollapsibleContactsSection } from "@/components/dashboard/whatsapp/campaigns/collapsible-contacts-section";
 import { ContactListCard } from "@/components/dashboard/whatsapp/campaigns/contact-list-card";
-import { CollapsibleSection } from "@/components/dashboard/whatsapp/campaigns/collapsible-section";
+import { CreateAssembledListDialog } from "@/components/dashboard/whatsapp/campaigns/create-assembled-list-dialog";
 import { CreateCampaignDialog } from "@/components/dashboard/whatsapp/campaigns/create-campaign-dialog";
 import { CampaignCard } from "@/components/dashboard/whatsapp/campaigns/campaign-card";
 import { CampaignSettingsDialog } from "@/components/dashboard/whatsapp/campaigns/campaign-settings-dialog";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 export const metadata: Metadata = { title: "Campanhas" };
 
+const VALID_TABS = ["contatos", "listas", "campanhas"] as const;
+
 export default async function CampaignsConnectionPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ tenantSlug: string; connectionId: string }>;
+  searchParams: Promise<{ tab?: string }>;
 }) {
   const { tenantSlug, connectionId } = await params;
+  const { tab } = await searchParams;
+  const initialTab = (VALID_TABS as readonly string[]).includes(tab ?? "") ? tab! : "contatos";
+
   const ctx = await getRequestContext(tenantSlug);
   requirePermission(ctx, "campaigns.view");
   const canManage = ctx.permissions.includes("campaigns.manage");
@@ -59,15 +67,24 @@ export default async function CampaignsConnectionPage({
     );
   }
 
-  const [{ contacts, activeCount }, lists, campaigns, campaignSettings] = await Promise.all([
-    getContactsOverview(ctx.tenantId, connectionId),
-    getListsForConnection(ctx.tenantId, connectionId),
+  const [contactsByList, tenantLists, campaigns, campaignSettings] = await Promise.all([
+    getContactsGroupedByList(ctx.tenantId, connectionId),
+    getListsForTenant(ctx.tenantId),
     listCampaignsForConnection(ctx.tenantId, connectionId),
     getConnectionCampaignSettings(ctx.tenantId, connectionId),
   ]);
 
+  const extractedLists = tenantLists.filter((l) => l.type === "EXTRACTED");
+  const assembledLists = tenantLists.filter((l) => l.type === "ASSEMBLED");
+
+  // A lista da agenda inteira (sourceGroupId null) é a única que conta pra
+  // esse resumo — as de grupo são subconjuntos dela, somar duplicaria.
+  const mainListEntry = contactsByList.find((entry) => !entry.list.sourceGroupId) ?? null;
+  const totalContacts = mainListEntry?.contacts.length ?? 0;
+  const activeContacts = mainListEntry?.contacts.filter((c) => !c.optedOut).length ?? 0;
+
   return (
-    <div className="max-w-4xl space-y-8">
+    <div className="max-w-4xl space-y-6">
       {backLink}
 
       <div>
@@ -77,69 +94,130 @@ export default async function CampaignsConnectionPage({
         </p>
       </div>
 
-      <section className="space-y-4">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-medium">Contatos</h2>
+      <Tabs defaultValue={initialTab}>
+        <TabsList>
+          <TabsTrigger value="contatos">
+            <Users className="size-4" />
+            Contatos
+          </TabsTrigger>
+          <TabsTrigger value="listas">
+            <List className="size-4" />
+            Listas
+          </TabsTrigger>
+          <TabsTrigger value="campanhas">
+            <Send className="size-4" />
+            Campanhas
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="contatos" className="space-y-4 pt-2">
+          <div className="flex items-center justify-between gap-4">
             <p className="text-sm text-muted-foreground">
-              {activeCount} contato(s) ativo(s) de {contacts.length} sincronizado(s).
+              {activeContacts} contato(s) ativo(s) de {totalContacts} sincronizado(s).
             </p>
+            {canManage && (
+              <div className="flex gap-2">
+                <SyncGroupDialog tenantSlug={tenantSlug} connectionId={connectionId} />
+                <SyncContactsButton tenantSlug={tenantSlug} connectionId={connectionId} />
+              </div>
+            )}
           </div>
-          {canManage && <SyncContactsButton tenantSlug={tenantSlug} connectionId={connectionId} />}
-        </div>
-        <ContactsTable tenantSlug={tenantSlug} contacts={contacts} canManage={canManage} />
-      </section>
 
-      <CollapsibleSection
-        title="Listas"
-        subtitle={`${lists.length} lista(s)`}
-        actions={canManage && <CreateListDialog tenantSlug={tenantSlug} connectionId={connectionId} />}
-      >
-        {lists.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Nenhuma lista criada ainda.</p>
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2">
-            {lists.map((list) => (
-              <ContactListCard
-                key={list.id}
-                tenantSlug={tenantSlug}
-                list={list}
-                connectionPhoneNumber={connection.phoneNumber}
-                canManage={canManage}
-              />
-            ))}
-          </div>
-        )}
-      </CollapsibleSection>
-
-      <section className="space-y-4">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-lg font-medium">Campanhas</h2>
-          {canManage && (
-            <div className="flex gap-2">
-              <CampaignSettingsDialog tenantSlug={tenantSlug} connectionId={connectionId} settings={campaignSettings} />
-              <CreateCampaignDialog tenantSlug={tenantSlug} connectionId={connectionId} lists={lists} />
+          {contactsByList.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Nenhum contato sincronizado ainda — clique em &ldquo;Sincronizar contatos&rdquo;.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {contactsByList.map(({ list, contacts: listContacts }) => (
+                <CollapsibleContactsSection
+                  key={list.id}
+                  title={list.name}
+                  isGroup={!!list.sourceGroupId}
+                  originLabel={list.sourceGroupId ? "grupo" : `de ${list.originPhoneNumber}`}
+                  contacts={listContacts}
+                  tenantSlug={tenantSlug}
+                  canManage={canManage}
+                />
+              ))}
             </div>
           )}
-        </div>
-        {campaigns.length === 0 ? (
+        </TabsContent>
+
+        <TabsContent value="listas" className="space-y-4 pt-2">
           <p className="text-sm text-muted-foreground">
-            Nenhuma campanha criada ainda — crie uma lista com contatos e depois uma campanha.
+            Todas as listas do tenant, de qualquer número conectado — não só deste.
           </p>
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2">
-            {campaigns.map((campaign) => (
-              <CampaignCard
-                key={campaign.id}
-                tenantSlug={tenantSlug}
-                connectionId={connectionId}
-                campaign={campaign}
-                canManage={canManage}
-              />
-            ))}
+          <Tabs defaultValue="extraidas">
+            <TabsList>
+              <TabsTrigger value="extraidas">Extraídas ({extractedLists.length})</TabsTrigger>
+              <TabsTrigger value="montadas">Montadas ({assembledLists.length})</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="extraidas" className="space-y-4 pt-2">
+              <p className="text-sm text-muted-foreground">
+                Nascem da sincronização de um número — pra criar uma nova, sincronize os contatos na aba
+                Contatos do número desejado.
+              </p>
+              {extractedLists.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Nenhuma lista extraída ainda.</p>
+              ) : (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {extractedLists.map((list) => (
+                    <ContactListCard key={list.id} tenantSlug={tenantSlug} list={list} canManage={canManage} />
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="montadas" className="space-y-4 pt-2">
+              <div className="flex items-center justify-between gap-4">
+                <p className="text-sm text-muted-foreground">
+                  Sem número de origem — junte contatos de uma ou mais listas extraídas.
+                </p>
+                {canManage && <CreateAssembledListDialog tenantSlug={tenantSlug} />}
+              </div>
+              {assembledLists.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Nenhuma lista montada ainda.</p>
+              ) : (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {assembledLists.map((list) => (
+                    <ContactListCard key={list.id} tenantSlug={tenantSlug} list={list} canManage={canManage} />
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+          </Tabs>
+        </TabsContent>
+
+        <TabsContent value="campanhas" className="space-y-4 pt-2">
+          <div className="flex items-center justify-end gap-2">
+            {canManage && (
+              <>
+                <CampaignSettingsDialog tenantSlug={tenantSlug} connectionId={connectionId} settings={campaignSettings} />
+                <CreateCampaignDialog tenantSlug={tenantSlug} connectionId={connectionId} lists={tenantLists} />
+              </>
+            )}
           </div>
-        )}
-      </section>
+          {campaigns.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Nenhuma campanha criada ainda — crie uma lista com contatos e depois uma campanha.
+            </p>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {campaigns.map((campaign) => (
+                <CampaignCard
+                  key={campaign.id}
+                  tenantSlug={tenantSlug}
+                  connectionId={connectionId}
+                  campaign={campaign}
+                  canManage={canManage}
+                />
+              ))}
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

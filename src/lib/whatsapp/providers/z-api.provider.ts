@@ -1,8 +1,11 @@
 import type { WhatsappProvider } from "../provider";
 import type {
   ContactNameResult,
+  GroupParticipantsResult,
   ListContactsResult,
+  ListGroupsResult,
   ProviderContact,
+  ProviderGroup,
   QrCodeResult,
   SendMessageResult,
   TestConnectionResult,
@@ -271,6 +274,107 @@ export class ZApiProvider implements WhatsappProvider {
     }
 
     return { ok: true, contacts, message: `${contacts.length} contato(s) encontrado(s).` };
+  }
+
+  /** `GET .../groups` — Z-API's documented bulk endpoint for every group
+   * the instance participates in, same pagination convention as
+   * `/contacts` (`?page=&pageSize=`). **Confirmed against Z-API's docs
+   * (developer.z-api.io/en/group/get-groups), not yet against a live
+   * instance** — same caveat as sendVideo below. `phone` here is the
+   * group's own JID (e.g. "120263...-group"), not a person's number. */
+  async listGroups(config: WhatsappConnectionConfig): Promise<ListGroupsResult> {
+    const groups: ProviderGroup[] = [];
+    const pageSize = 100;
+
+    for (let page = 1; ; page++) {
+      const url = `${trimTrailingSlash(config.apiUrl)}/groups?page=${page}&pageSize=${pageSize}`;
+
+      let response: Response;
+      try {
+        response = await fetchWithTimeout(url, {
+          method: "GET",
+          headers: buildHeaders(config.apiToken),
+        });
+      } catch {
+        return {
+          ok: groups.length > 0,
+          groups,
+          message: "Falha de comunicação ao buscar grupos da instância.",
+        };
+      }
+
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        return {
+          ok: groups.length > 0,
+          groups,
+          message:
+            (data as { error?: string } | null)?.error ?? `Erro ao buscar grupos (HTTP ${response.status}).`,
+          raw: data,
+        };
+      }
+
+      const rows = Array.isArray(data) ? data : [];
+      for (const row of rows) {
+        if (!isRecord(row)) continue;
+        const id = typeof row.phone === "string" ? row.phone.trim() : "";
+        if (!id) continue;
+        const name = typeof row.name === "string" ? row.name.trim() : "";
+        groups.push({ id, name: name || id });
+      }
+
+      if (rows.length < pageSize) break; // last page
+    }
+
+    return { ok: true, groups, message: `${groups.length} grupo(s) encontrado(s).` };
+  }
+
+  /** `GET .../groups/{groupId}` — returns the group's metadata plus its
+   * `participants` array (`phone`, optional `name`/`short`). **Confirmed
+   * against Z-API's docs (developer.z-api.io/en/group/metadata-group), not
+   * yet against a live instance.** Same "name" > "short" preference and
+   * "is this actually a name?" filtering as listContacts/getContactName —
+   * a participant not saved anywhere just comes back with a phone. */
+  async getGroupParticipants(
+    config: WhatsappConnectionConfig,
+    groupId: string
+  ): Promise<GroupParticipantsResult> {
+    const url = `${trimTrailingSlash(config.apiUrl)}/groups/${groupId}`;
+
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(url, {
+        method: "GET",
+        headers: buildHeaders(config.apiToken),
+      });
+    } catch {
+      return { ok: false, participants: [], message: "Não foi possível buscar os participantes do grupo." };
+    }
+
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      return {
+        ok: false,
+        participants: [],
+        message:
+          (data as { error?: string } | null)?.error ?? `Erro ao buscar o grupo (HTTP ${response.status}).`,
+        raw: data,
+      };
+    }
+
+    const rows = isRecord(data) && Array.isArray((data as { participants?: unknown }).participants)
+      ? ((data as { participants: unknown[] }).participants)
+      : [];
+
+    const participants = rows.flatMap((row) => {
+      if (!isRecord(row)) return [];
+      const phone = typeof row.phone === "string" ? row.phone.trim() : "";
+      if (!phone) return [];
+      const rawName = firstNonEmpty(row.name, row.short);
+      return [{ phone, ...(rawName && isRealName(rawName) ? { name: rawName } : {}) }];
+    });
+
+    return { ok: true, participants, message: `${participants.length} participante(s) encontrado(s).`, raw: data };
   }
 
   async sendMessage(
