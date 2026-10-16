@@ -20,6 +20,7 @@ import {
   getConnectionSummary,
   getConnectionWithSecret,
   getConnectionByApiKeyHash,
+  getConnectionCredentialsById,
   setConnectionApiKey,
   setWebhookSecret,
   revokeConnectionApiKey,
@@ -323,10 +324,29 @@ export async function retestConnection(
     phoneNumber: connection.phoneNumber,
   });
 
+  // Enquanto conectado, consulta qual número está realmente pareado agora
+  // e mantém o campo em dia sozinho — sem isso, re-parear um aparelho
+  // diferente deixaria o número salvo (e tudo que depende dele, como a
+  // extração de contatos) referenciando o aparelho antigo até alguém
+  // editar manualmente. Best-effort: uma falha aqui nunca derruba o
+  // resultado do teste em si.
+  let phoneNumber: string | undefined;
+  if (result.status === "CONNECTED") {
+    const device = await provider.getConnectedPhone({
+      apiUrl: connection.apiUrl,
+      apiToken,
+      phoneNumber: connection.phoneNumber,
+    });
+    if (device.ok && device.phone && device.phone !== connection.phoneNumber) {
+      phoneNumber = device.phone;
+    }
+  }
+
   await updateConnectionStatus(tenantId, connectionId, {
     status: result.status,
     lastValidation: new Date(),
     lastError: result.ok ? null : result.message,
+    ...(phoneNumber ? { phoneNumber } : {}),
   });
 
   return result;
@@ -389,6 +409,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/** Best-effort: the real paired phone, if different from what's stored —
+ * or undefined on any failure/no-change, so the caller can just spread it
+ * in conditionally instead of branching. No tenantId available on this
+ * path (webhook), hence getConnectionCredentialsById instead of the
+ * tenant-scoped getConnectionWithSecret. */
+async function detectConnectedPhone(connectionId: string): Promise<string | undefined> {
+  const connection = await getConnectionCredentialsById(connectionId);
+  if (!connection?.apiUrl || !connection.apiTokenCipher) return undefined;
+
+  const apiToken = decryptSecret(connection.apiTokenCipher);
+  const provider = getWhatsappProvider(connection.provider.key);
+  const device = await provider.getConnectedPhone({
+    apiUrl: connection.apiUrl,
+    apiToken,
+    phoneNumber: connection.phoneNumber,
+  });
+
+  return device.ok && device.phone && device.phone !== connection.phoneNumber ? device.phone : undefined;
+}
+
 /** Flips the connection's status in near-real-time when Z-API tells us the
  * WhatsApp session connected/disconnected — instead of only finding out
  * whenever a human happens to click "Testar novamente". Deliberately
@@ -403,10 +443,16 @@ async function applyConnectionStatusFromWebhook(
   const type = payload.type;
 
   if (type === CONNECTED_EVENT_TYPE) {
+    // Mesma lógica de auto-detecção do retestConnection, só que disparada
+    // pelo push do webhook em vez do poll manual — sem isso, reconectar um
+    // aparelho diferente só corrigiria o número salvo na próxima vez que
+    // alguém clicasse "Testar novamente".
+    const phoneNumber = await detectConnectedPhone(connectionId);
     await updateConnectionStatusById(connectionId, {
       status: "CONNECTED",
       lastValidation: new Date(),
       lastError: null,
+      ...(phoneNumber ? { phoneNumber } : {}),
     });
   } else if (type === DISCONNECTED_EVENT_TYPE) {
     await updateConnectionStatusById(connectionId, {

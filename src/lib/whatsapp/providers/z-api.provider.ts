@@ -1,6 +1,7 @@
 import type { WhatsappProvider } from "../provider";
 import type {
   ContactNameResult,
+  GetConnectedPhoneResult,
   GroupParticipantsResult,
   ListContactsResult,
   ListGroupsResult,
@@ -409,6 +410,40 @@ export class ZApiProvider implements WhatsappProvider {
     });
 
     return { ok: true, participants, message: `${participants.length} participante(s) encontrado(s).`, raw: data };
+  }
+
+  /** `GET .../device` — the actual phone paired to the session right now
+   * (confirmed against a real instance: `{ phone, lid, name, ... }`),
+   * independent of whatever `phoneNumber` label happens to be stored on
+   * the connection. Used to keep that label auto-synced instead of relying
+   * on a manual edit every time the paired device changes. */
+  async getConnectedPhone(config: WhatsappConnectionConfig): Promise<GetConnectedPhoneResult> {
+    const url = `${trimTrailingSlash(config.apiUrl)}/device`;
+
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(url, { method: "GET", headers: buildHeaders(config.apiToken) });
+    } catch {
+      return { ok: false, message: "Não foi possível consultar o dispositivo pareado." };
+    }
+
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          (data as { error?: string } | null)?.error ?? `Erro ao consultar dispositivo (HTTP ${response.status}).`,
+        raw: data,
+      };
+    }
+
+    const phone = typeof (data as { phone?: string } | null)?.phone === "string"
+      ? (data as { phone: string }).phone.trim()
+      : "";
+    if (!phone) {
+      return { ok: false, message: "A instância não retornou um número pareado.", raw: data };
+    }
+    return { ok: true, phone, message: "Dispositivo consultado com sucesso.", raw: data };
   }
 
   async sendMessage(

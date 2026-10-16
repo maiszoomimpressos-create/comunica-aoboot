@@ -1,5 +1,6 @@
 import type {
   ContactNameResult,
+  GetConnectedPhoneResult,
   GroupParticipantsResult,
   ListContactsResult,
   ListGroupsResult,
@@ -73,4 +74,9 @@ export interface WhatsappProvider {
     config: WhatsappConnectionConfig,
     groupId: string
   ): Promise<GroupParticipantsResult>;
+  /** The real phone number currently paired to the session (Z-API's
+   * `/device`) — used to keep the connection's stored `phoneNumber` label
+   * automatically in sync with whatever device actually got QR-paired,
+   * instead of requiring a manual edit every time. Never throws. */
+  getConnectedPhone(config: WhatsappConnectionConfig): Promise<GetConnectedPhoneResult>;
 }

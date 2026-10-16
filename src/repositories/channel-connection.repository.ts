@@ -134,7 +134,16 @@ export function updateEnabledServices(tenantId: string, connectionId: string, se
 export function updateConnectionStatus(
   tenantId: string,
   connectionId: string,
-  data: { status: ChannelConnectionStatus; lastValidation: Date | null; lastError: string | null }
+  data: {
+    status: ChannelConnectionStatus;
+    lastValidation: Date | null;
+    lastError: string | null;
+    // Setado junto quando a checagem detecta ao vivo qual número está
+    // realmente pareado agora (ver getConnectedPhone) — mantém o campo
+    // automático em vez de depender de edição manual a cada troca de
+    // aparelho.
+    phoneNumber?: string;
+  }
 ) {
   return prisma.channelConnection.updateMany({
     where: { id: connectionId, tenantId },
@@ -199,13 +208,33 @@ export function getConnectionForWebhook(connectionId: string) {
   });
 }
 
+/** Credenciais pra chamar o provider a partir do caminho do webhook (sem
+ * tenantId disponível) — usado só pra consultar o dispositivo pareado
+ * ao vivo quando o evento de conexão chega (ver applyConnectionStatusFromWebhook). */
+export function getConnectionCredentialsById(connectionId: string) {
+  return prisma.channelConnection.findUnique({
+    where: { id: connectionId },
+    select: {
+      apiUrl: true,
+      apiTokenCipher: true,
+      phoneNumber: true,
+      provider: { select: { key: true } },
+    },
+  });
+}
+
 /** Same shape as updateConnectionStatus but keyed only by connectionId —
  * used from the webhook path, which (unlike every tenant-facing action)
  * has no tenantId to scope by; getConnectionForWebhook already proved the
  * connectionId is real via the secret check before this is ever called. */
 export function updateConnectionStatusById(
   connectionId: string,
-  data: { status: ChannelConnectionStatus; lastValidation: Date | null; lastError: string | null }
+  data: {
+    status: ChannelConnectionStatus;
+    lastValidation: Date | null;
+    lastError: string | null;
+    phoneNumber?: string;
+  }
 ) {
   return prisma.channelConnection.update({ where: { id: connectionId }, data });
 }

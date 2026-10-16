@@ -27,6 +27,18 @@ export interface TestConnectionResult {
   raw?: unknown;
 }
 
+/** The real phone number currently paired to the session — distinct from
+ * `WhatsappConnectionConfig.phoneNumber`, which is just a user-editable
+ * label stored on the connection and can go stale (e.g. after re-pairing a
+ * different phone). Lets callers keep that label in sync automatically
+ * instead of requiring a manual edit every time the paired device changes. */
+export interface GetConnectedPhoneResult {
+  ok: boolean;
+  phone?: string;
+  message: string;
+  raw?: unknown;
+}
+
 export interface SendMessageResult {
   ok: boolean;
   message: string;
