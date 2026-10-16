@@ -273,6 +273,40 @@ export class ZApiProvider implements WhatsappProvider {
       if (rows.length < pageSize) break; // last page
     }
 
+    // `/contacts` only covers numbers Z-API considers an actual "contact"
+    // (saved name, vCard, etc) — a chat that's just started (or marked
+    // spam) with no name attached never shows up there even though it's a
+    // real, visible conversation on the phone. `/chats` (same pagination
+    // convention) is every open conversation instead, group or not — so
+    // merge in whatever `/chats` has that `/contacts` didn't, nameless
+    // (this endpoint doesn't return one), skipping groups (`isGroup`;
+    // those are handled by listGroups/getGroupParticipants, not here).
+    // Best-effort: a failure here never drops the `/contacts` result
+    // already in hand.
+    const knownPhones = new Set(contacts.map((c) => c.phone));
+    try {
+      for (let page = 1; ; page++) {
+        const url = `${trimTrailingSlash(config.apiUrl)}/chats?page=${page}&pageSize=${pageSize}`;
+        const response = await fetchWithTimeout(url, { method: "GET", headers: buildHeaders(config.apiToken) });
+        if (!response.ok) break;
+
+        const data = await response.json().catch(() => null);
+        const rows = Array.isArray(data) ? data : [];
+        for (const row of rows) {
+          if (!isRecord(row)) continue;
+          if (row.isGroup === true) continue;
+          const phone = typeof row.phone === "string" ? row.phone.trim() : "";
+          if (!phone || knownPhones.has(phone)) continue;
+          knownPhones.add(phone);
+          contacts.push({ phone });
+        }
+
+        if (rows.length < pageSize) break; // last page
+      }
+    } catch {
+      // Falha ao buscar /chats não invalida o que já temos de /contacts.
+    }
+
     return { ok: true, contacts, message: `${contacts.length} contato(s) encontrado(s).` };
   }
 
