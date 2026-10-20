@@ -22,6 +22,9 @@ export interface ChannelConnectionSummary {
   // Quais serviços (config/whatsapp-services.ts) a chave de API pode
   // chamar — ver sendPurchaseConfirmation / sendBalanceAlert.
   enabledServices: string[];
+  // Config do atendente de IA (ver bot-attendant.service.ts) — null quando
+  // o tenant nunca salvou nada ainda (equivale a desativado).
+  botConfig: { enabled: boolean; businessProfile: string | null } | null;
 }
 
 const summarySelect = {
@@ -39,6 +42,7 @@ const summarySelect = {
   apiKeyLastUsedAt: true,
   balanceAlertPhones: true,
   enabledServices: true,
+  botConfig: { select: { enabled: true, businessProfile: true } },
 } as const;
 
 /** Get-or-create the tenant's channel row for a given type (WHATSAPP, ...). */

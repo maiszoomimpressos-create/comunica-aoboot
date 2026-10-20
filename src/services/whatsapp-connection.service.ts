@@ -33,6 +33,7 @@ import {
   type ChannelConnectionSummary,
 } from "@/repositories/channel-connection.repository";
 import { getProviderByKey } from "@/repositories/channel-provider.repository";
+import { handleInboundMessage } from "./bot-attendant.service";
 import {
   ConflictError,
   ForbiddenError,
@@ -404,6 +405,11 @@ export async function ensureWebhookUrl(tenantId: string, connectionId: string): 
  * nothing (the raw payload is still logged either way) until corrected. */
 const CONNECTED_EVENT_TYPE = "ConnectedCallback";
 const DISCONNECTED_EVENT_TYPE = "DisconnectedCallback";
+/** Z-API's documented type for an inbound WhatsApp message — like
+ * CONNECTED_EVENT_TYPE/DISCONNECTED_EVENT_TYPE above, taken from Z-API's
+ * public docs and NOT yet confirmed against a real event on this instance.
+ * Expected shape: `{ phone, fromMe, isGroup, text: { message } }`. */
+const MESSAGE_RECEIVED_EVENT_TYPE = "ReceivedCallback";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -463,17 +469,38 @@ async function applyConnectionStatusFromWebhook(
   }
 }
 
+/** Hands an inbound text message to the AI attendant (see
+ * bot-attendant.service.ts) — the bot itself decides whether to respond
+ * (checks BotConfig.enabled). Ignores messages the connected number sent
+ * itself (fromMe) and group messages (isGroup) — this first increment only
+ * handles 1:1 chats. Never throws, same convention as the rest of this
+ * webhook path. */
+async function maybeHandleInboundBotMessage(connectionId: string, payload: unknown): Promise<void> {
+  if (!isRecord(payload) || payload.type !== MESSAGE_RECEIVED_EVENT_TYPE) return;
+  if (payload.fromMe === true || payload.isGroup === true) return;
+
+  const fromPhone = payload.phone;
+  const text = isRecord(payload.text) ? payload.text.message : undefined;
+  if (typeof fromPhone !== "string" || typeof text !== "string" || !text.trim()) return;
+
+  await handleInboundMessage({ connectionId, fromPhone, text });
+}
+
 /** Called by the public webhook route after verifying the secret. Always
  * persists the raw payload first (see WebhookEvent's schema comment:
  * interpreting these is still mostly future work, this is the log
- * everything else reads from) — connection-status events are the one
- * exception acted on directly, see applyConnectionStatusFromWebhook.
+ * everything else reads from) — connection-status events and inbound
+ * messages are the exceptions acted on directly, see
+ * applyConnectionStatusFromWebhook / maybeHandleInboundBotMessage.
  * Never throws on a malformed/unexpected payload shape — a webhook
  * endpoint must always ack fast. */
 export async function recordWebhookEvent(connectionId: string, payload: unknown): Promise<void> {
   await createWebhookEvent(connectionId, "z-api", payload);
   await applyConnectionStatusFromWebhook(connectionId, payload).catch((err) => {
     console.error("Failed to apply connection status from webhook:", err);
+  });
+  await maybeHandleInboundBotMessage(connectionId, payload).catch((err) => {
+    console.error("Failed to run bot attendant on inbound message:", err);
   });
 }
 

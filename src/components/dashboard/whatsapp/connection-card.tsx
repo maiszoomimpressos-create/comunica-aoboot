@@ -25,6 +25,7 @@ import { QrCodeSection } from "./qr-code-section";
 import { EditConnectionDialog } from "./edit-connection-dialog";
 import { BalanceAlertPhonesDialog } from "./balance-alert-phones-dialog";
 import { EnabledServicesDialog } from "./enabled-services-dialog";
+import { BotAttendantSection } from "./bot-attendant-section";
 import { retestWhatsappConnectionAction } from "@/actions/whatsapp/retest-connection";
 import { deleteWhatsappConnectionAction } from "@/actions/whatsapp/delete-connection";
 import type { ChannelConnectionSummary } from "@/repositories/channel-connection.repository";
@@ -189,6 +190,15 @@ export function ConnectionCard({
               apiKeyPrefix={connection.apiKeyPrefix}
               apiKeyCreatedAt={connection.apiKeyCreatedAt}
               apiKeyLastUsedAt={connection.apiKeyLastUsedAt}
+            />
+          )}
+
+          {isFullyConnected && (
+            <BotAttendantSection
+              tenantSlug={tenantSlug}
+              connectionId={connection.id}
+              defaultEnabled={connection.botConfig?.enabled ?? false}
+              defaultBusinessProfile={connection.botConfig?.businessProfile ?? null}
             />
           )}
         </>
