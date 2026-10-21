@@ -408,7 +408,9 @@ const DISCONNECTED_EVENT_TYPE = "DisconnectedCallback";
 /** Z-API's documented type for an inbound WhatsApp message — like
  * CONNECTED_EVENT_TYPE/DISCONNECTED_EVENT_TYPE above, taken from Z-API's
  * public docs and NOT yet confirmed against a real event on this instance.
- * Expected shape: `{ phone, fromMe, isGroup, text: { message } }`. */
+ * Expected shape for text: `{ phone, fromMe, isGroup, text: { message } }`;
+ * for a voice message: `{ phone, fromMe, isGroup, audio: { audioUrl } }`
+ * (same confirmation caveat — see maybeHandleInboundBotMessage). */
 const MESSAGE_RECEIVED_EVENT_TYPE = "ReceivedCallback";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -480,10 +482,18 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
   if (payload.fromMe === true || payload.isGroup === true) return;
 
   const fromPhone = payload.phone;
-  const text = isRecord(payload.text) ? payload.text.message : undefined;
-  if (typeof fromPhone !== "string" || typeof text !== "string" || !text.trim()) return;
+  if (typeof fromPhone !== "string") return;
 
-  await handleInboundMessage({ connectionId, fromPhone, text });
+  const text = isRecord(payload.text) ? payload.text.message : undefined;
+  if (typeof text === "string" && text.trim()) {
+    await handleInboundMessage({ connectionId, fromPhone, text });
+    return;
+  }
+
+  const audioUrl = isRecord(payload.audio) ? payload.audio.audioUrl : undefined;
+  if (typeof audioUrl === "string" && audioUrl) {
+    await handleInboundMessage({ connectionId, fromPhone, audioUrl });
+  }
 }
 
 /** Called by the public webhook route after verifying the secret. Always

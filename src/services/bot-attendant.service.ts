@@ -1,4 +1,4 @@
-import { generateText, isStepCount, tool, type ModelMessage } from "ai";
+import { generateText, isStepCount, tool, transcribe, type ModelMessage } from "ai";
 import { z } from "zod";
 import { decryptSecret } from "@/lib/crypto/secret-box";
 import { getWhatsappProvider } from "@/lib/whatsapp/registry";
@@ -28,6 +28,7 @@ Seu trabalho é ajudar o cliente a:
 - Consultar o status de uma corrida em andamento.
 - Cancelar uma corrida.
 Seja breve, direto e cordial, como uma central de atendimento real. Responda sempre em português.
+Antes de confirmar um pedido de corrida, use a ferramenta "buscarEndereco" pra conferir se a origem e o destino que o cliente informou existem de verdade — se não encontrar, peça pro cliente detalhar ou repetir o endereço em vez de assumir que está certo.
 Se o cliente pedir explicitamente para falar com um atendente humano, ou a solicitação estiver fora do que você consegue resolver, use a ferramenta "escalarParaHumano" em vez de tentar resolver sozinho.`;
 
 function buildSystemPrompt(businessProfile: string | null): string {
@@ -35,10 +36,85 @@ function buildSystemPrompt(businessProfile: string | null): string {
   return `${BASE_SYSTEM_PROMPT}\n\nInformações desta empresa:\n${businessProfile.trim()}`;
 }
 
-export interface HandleInboundMessageInput {
-  connectionId: string;
-  fromPhone: string;
-  text: string;
+export type HandleInboundMessageInput = { connectionId: string; fromPhone: string } & (
+  | { text: string; audioUrl?: undefined }
+  | { audioUrl: string; text?: undefined }
+);
+
+/** `null` on any failure (download, unsupported format, empty result) — the
+ * caller falls back to a fixed "didn't understand" reply instead of ever
+ * calling the chat model with no real text. Z-API's audio webhook payload
+ * (the `audioUrl` this receives) is documented publicly but, like
+ * MESSAGE_RECEIVED_EVENT_TYPE, not yet confirmed against a real event on
+ * this instance. */
+async function transcribeAudio(audioUrl: string): Promise<string | null> {
+  try {
+    const result = await transcribe({ model: "openai/whisper-1", audio: new URL(audioUrl) });
+    return result.text.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Google Maps Geocoding API — same provider the user's existing mobility
+ * app (MAI Drive) already uses, so an address the bot confirms matches what
+ * the app would find. Only wired in when GOOGLE_MAPS_API_KEY is set (see
+ * buildTools); never throws, a miss/error just comes back as
+ * `{ encontrado: false }` so the model can ask the customer to clarify. */
+async function buscarEndereco(endereco: string): Promise<
+  { encontrado: true; enderecoFormatado: string; lat: number; lng: number } | { encontrado: false }
+> {
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (!apiKey) return { encontrado: false };
+
+  try {
+    const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
+    url.searchParams.set("address", endereco);
+    url.searchParams.set("key", apiKey);
+    url.searchParams.set("region", "br");
+    url.searchParams.set("language", "pt-BR");
+
+    const response = await fetch(url);
+    const data = await response.json();
+    const first = data?.results?.[0];
+    if (data?.status !== "OK" || !first) return { encontrado: false };
+
+    return {
+      encontrado: true,
+      enderecoFormatado: first.formatted_address,
+      lat: first.geometry?.location?.lat,
+      lng: first.geometry?.location?.lng,
+    };
+  } catch {
+    return { encontrado: false };
+  }
+}
+
+function buildTools() {
+  const tools = {
+    escalarParaHumano: tool({
+      description:
+        'Transfere a conversa para um atendente humano. Use quando o cliente pedir explicitamente, ou quando o pedido estiver fora do que você consegue resolver.',
+      inputSchema: z.object({
+        motivo: z.string().describe("Breve motivo da transferência."),
+      }),
+      execute: async () => ({ ok: true }),
+    }),
+  };
+
+  if (!process.env.GOOGLE_MAPS_API_KEY) return tools;
+
+  return {
+    ...tools,
+    buscarEndereco: tool({
+      description:
+        "Busca e valida um endereço (origem ou destino) informado pelo cliente, retornando o endereço formatado e a localização. Use antes de confirmar um pedido de corrida.",
+      inputSchema: z.object({
+        endereco: z.string().describe("Endereço completo ou parcial informado pelo cliente."),
+      }),
+      execute: async ({ endereco }) => buscarEndereco(endereco),
+    }),
+  };
 }
 
 /** Entry point called from the inbound webhook pipeline (see
@@ -48,7 +124,7 @@ export interface HandleInboundMessageInput {
  * here is itself defensive (missing config/credentials just means "don't
  * respond", not an error). */
 export async function handleInboundMessage(input: HandleInboundMessageInput): Promise<void> {
-  const { connectionId, fromPhone, text } = input;
+  const { connectionId, fromPhone } = input;
 
   const config = await getBotConfig(connectionId);
   if (!config?.enabled) return;
@@ -56,8 +132,21 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
   const credentials = await getConnectionCredentialsById(connectionId);
   if (!credentials?.apiUrl || !credentials.apiTokenCipher) return;
 
+  const apiToken = decryptSecret(credentials.apiTokenCipher);
+  const provider = getWhatsappProvider(credentials.provider.key);
+  const providerConfig = { apiUrl: credentials.apiUrl, apiToken, phoneNumber: credentials.phoneNumber };
+
   const conversation = await getOrCreateActiveBotConversation(connectionId, fromPhone);
   if (conversation.status === "ESCALATED") return;
+
+  const text = "text" in input ? input.text : await transcribeAudio(input.audioUrl);
+  if (!text) {
+    const fallback = "Não consegui entender o áudio, pode escrever a mensagem?";
+    await provider.sendMessage(providerConfig, fromPhone, fallback);
+    await createBotMessage(conversation.id, "OUT", fallback);
+    await touchBotConversation(conversation.id);
+    return;
+  }
 
   await createBotMessage(conversation.id, "IN", text);
 
@@ -69,40 +158,22 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
 
   const settings = await getAiAttendantSettings();
 
-  let escalated = false;
   const result = await generateText({
     model: settings.model,
     instructions: buildSystemPrompt(config.businessProfile),
     messages,
-    tools: {
-      escalarParaHumano: tool({
-        description:
-          'Transfere a conversa para um atendente humano. Use quando o cliente pedir explicitamente, ou quando o pedido estiver fora do que você consegue resolver.',
-        inputSchema: z.object({
-          motivo: z.string().describe("Breve motivo da transferência."),
-        }),
-        execute: async () => {
-          escalated = true;
-          return { ok: true };
-        },
-      }),
-    },
-    stopWhen: isStepCount(4),
+    tools: buildTools(),
+    stopWhen: isStepCount(6),
   });
 
+  const escalated = result.toolCalls.some((call) => call.toolName === "escalarParaHumano");
   const replyText =
     result.text.trim() ||
     (escalated
       ? "Só um momento, vou te transferir para um atendente humano."
       : "Desculpe, não entendi. Pode repetir?");
 
-  const apiToken = decryptSecret(credentials.apiTokenCipher);
-  const provider = getWhatsappProvider(credentials.provider.key);
-  await provider.sendMessage(
-    { apiUrl: credentials.apiUrl, apiToken, phoneNumber: credentials.phoneNumber },
-    fromPhone,
-    replyText
-  );
+  await provider.sendMessage(providerConfig, fromPhone, replyText);
 
   await createBotMessage(conversation.id, "OUT", replyText);
   if (escalated) {
