@@ -45,12 +45,23 @@ export type HandleInboundMessageInput = { connectionId: string; fromPhone: strin
 /** `null` on any failure (download, unsupported format, empty result) — the
  * caller falls back to a fixed "didn't understand" reply instead of ever
  * calling the chat model with no real text. Z-API's audio webhook payload
- * (the `audioUrl` this receives) is documented publicly but, like
- * MESSAGE_RECEIVED_EVENT_TYPE, not yet confirmed against a real event on
- * this instance. */
+ * shape (confirmed against a real event: `audio.audioUrl` pointing at a
+ * Backblaze B2 temp URL, publicly fetchable, no auth needed) is as
+ * documented. The custom `download` is required, not cosmetic: Z-API's
+ * response Content-Type is `audio/ogg; codecs=opus` — Whisper's format
+ * whitelist rejects that exact string (even though plain "ogg" is
+ * supported), so the codec suffix has to be stripped before it reaches
+ * the model. */
 async function transcribeAudio(audioUrl: string): Promise<string | null> {
   try {
-    const result = await transcribe({ model: "openai/whisper-1", audio: new URL(audioUrl) });
+    const result = await transcribe({
+      model: "openai/whisper-1",
+      audio: new URL(audioUrl),
+      download: async ({ url }) => {
+        const response = await fetch(url);
+        return { data: new Uint8Array(await response.arrayBuffer()), mediaType: "audio/ogg" };
+      },
+    });
     return result.text.trim() || null;
   } catch {
     return null;

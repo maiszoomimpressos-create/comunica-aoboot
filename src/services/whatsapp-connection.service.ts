@@ -405,12 +405,13 @@ export async function ensureWebhookUrl(tenantId: string, connectionId: string): 
  * nothing (the raw payload is still logged either way) until corrected. */
 const CONNECTED_EVENT_TYPE = "ConnectedCallback";
 const DISCONNECTED_EVENT_TYPE = "DisconnectedCallback";
-/** Z-API's documented type for an inbound WhatsApp message — like
- * CONNECTED_EVENT_TYPE/DISCONNECTED_EVENT_TYPE above, taken from Z-API's
- * public docs and NOT yet confirmed against a real event on this instance.
- * Expected shape for text: `{ phone, fromMe, isGroup, text: { message } }`;
- * for a voice message: `{ phone, fromMe, isGroup, audio: { audioUrl } }`
- * (same confirmation caveat — see maybeHandleInboundBotMessage). */
+/** Z-API's type for an inbound WhatsApp message — confirmed for real via
+ * the AI attendant's first live test (text and voice messages both landed
+ * with this type). Shape for text: `{ phone, fromMe, isGroup, text: {
+ * message } }`; for a voice message: `{ phone, fromMe, isGroup, audio: {
+ * audioUrl, mimeType } }` — audioUrl is a public Backblaze B2 temp URL, no
+ * auth needed to download (see transcribeAudio in bot-attendant.service.ts
+ * for why its Content-Type still needs normalizing before Whisper). */
 const MESSAGE_RECEIVED_EVENT_TYPE = "ReceivedCallback";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
