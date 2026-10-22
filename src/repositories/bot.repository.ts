@@ -1,8 +1,27 @@
 import { prisma } from "@/lib/db/prisma";
-import type { BotConversationStatus, BotMessageDirection } from "@/generated/prisma/client";
+import { Prisma, type BotConversationStatus, type BotMessageDirection } from "@/generated/prisma/client";
 
 export function getBotConfig(connectionId: string) {
   return prisma.botConfig.findUnique({ where: { connectionId } });
+}
+
+/** Atomic idempotency claim: `true` the first time this (connection,
+ * messageId) pair is seen, `false` on every retry — the Z-API audio
+ * webhook is confirmed (in production) to redeliver the same messageId a
+ * few seconds apart, which doubled every reply before this existed.
+ * Insert-and-catch-the-unique-violation, not check-then-insert, so there's
+ * no race window between two near-simultaneous deliveries. */
+export async function tryClaimInboundMessage(
+  connectionId: string,
+  messageId: string
+): Promise<boolean> {
+  try {
+    await prisma.processedWebhookMessage.create({ data: { connectionId, messageId } });
+    return true;
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") return false;
+    throw err;
+  }
 }
 
 /** Tenant-facing upsert — called from the dashboard toggle/perfil form (see

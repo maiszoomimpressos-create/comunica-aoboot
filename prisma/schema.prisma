@@ -440,8 +440,9 @@ model ChannelConnection {
   campaigns        Campaign[]
   campaignSettings ConnectionCampaignSettings?
 
-  botConfig        BotConfig?
-  botConversations BotConversation[]
+  botConfig                BotConfig?
+  botConversations         BotConversation[]
+  processedWebhookMessages ProcessedWebhookMessage[]
 
   @@index([tenantId, channelId])
   @@map("channel_connection")
@@ -463,6 +464,24 @@ model WebhookEvent {
 
   @@index([connectionId, receivedAt])
   @@map("webhook_event")
+}
+
+// Trava de idempotência pro pipeline do atendente de IA — a Z-API manda o
+// webhook de mensagem de áudio DUAS VEZES pro mesmo messageId (confirmado
+// em produção, alguns segundos de diferença entre as duas entregas), o que
+// fazia o atendente processar e responder duas vezes (e gastar em dobro).
+// `@@unique` em [connectionId, messageId] faz o INSERT falhar na segunda
+// entrega — tentativa de criar como trava atômica, sem janela de corrida
+// entre checar e gravar. Ver tryClaimInboundMessage em bot.repository.ts.
+model ProcessedWebhookMessage {
+  id           String            @id @default(cuid())
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  messageId    String
+  processedAt  DateTime          @default(now())
+
+  @@unique([connectionId, messageId])
+  @@map("processed_webhook_message")
 }
 
 // =====================================================================

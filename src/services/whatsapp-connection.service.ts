@@ -34,6 +34,7 @@ import {
 } from "@/repositories/channel-connection.repository";
 import { getProviderByKey } from "@/repositories/channel-provider.repository";
 import { handleInboundMessage } from "./bot-attendant.service";
+import { tryClaimInboundMessage } from "@/repositories/bot.repository";
 import {
   ConflictError,
   ForbiddenError,
@@ -484,6 +485,17 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
 
   const fromPhone = payload.phone;
   if (typeof fromPhone !== "string") return;
+
+  // Z-API redelivers the same audio message's webhook a few seconds apart
+  // (confirmed in production) — claim the messageId first so the second
+  // delivery is a no-op instead of a second AI reply. No messageId (any
+  // future payload shape that omits it) just skips the dedup, same as
+  // today's unprotected behavior.
+  const messageId = payload.messageId;
+  if (typeof messageId === "string") {
+    const claimed = await tryClaimInboundMessage(connectionId, messageId);
+    if (!claimed) return;
+  }
 
   const text = isRecord(payload.text) ? payload.text.message : undefined;
   if (typeof text === "string" && text.trim()) {
