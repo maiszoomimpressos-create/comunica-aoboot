@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Trash2, RefreshCw, Send } from "lucide-react";
+import { Trash2, RefreshCw, Send, Smartphone } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -48,6 +48,7 @@ export function ConnectionCard({
 }) {
   const router = useRouter();
   const [showSend, setShowSend] = useState(false);
+  const [showDisconnectHelp, setShowDisconnectHelp] = useState(false);
   const [retesting, setRetesting] = useState(false);
   const [deleting, setDeleting] = useState(false);
   // Still just a request — a platform admin hasn't filled in the Z-API
@@ -142,6 +143,12 @@ export function ConnectionCard({
               </Button>
             )}
             {isFullyConnected && (
+              <Button variant="outline" size="sm" onClick={() => setShowDisconnectHelp((v) => !v)}>
+                <Smartphone className="size-4" />
+                Trocar número
+              </Button>
+            )}
+            {isFullyConnected && (
               <EnabledServicesDialog
                 tenantSlug={tenantSlug}
                 connectionId={connection.id}
@@ -180,6 +187,29 @@ export function ConnectionCard({
           {showSend && isFullyConnected && (
             <div className="mt-4 border-t border-border pt-4">
               <SendTestMessageForm tenantSlug={tenantSlug} connectionId={connection.id} />
+            </div>
+          )}
+
+          {showDisconnectHelp && isFullyConnected && (
+            <div className="mt-4 border-t border-border pt-4">
+              <div className="flex items-center gap-1.5 text-sm font-medium">
+                <Smartphone className="size-4 text-muted-foreground" />
+                Como trocar o número
+              </div>
+              <ol className="mt-2 list-decimal space-y-1 pl-4 text-sm text-muted-foreground">
+                <li>
+                  No celular que tem o <strong className="text-foreground">{connection.phoneNumber}</strong>{" "}
+                  conectado hoje, abra o WhatsApp.
+                </li>
+                <li>
+                  Vá em <strong className="text-foreground">Configurações → Aparelhos conectados</strong>,
+                  encontre essa conexão e toque em <strong className="text-foreground">Desconectar</strong>.
+                </li>
+                <li>
+                  O status muda sozinho pra &ldquo;Aguardando QR Code&rdquo; aqui no painel, e o QR Code
+                  aparece neste card pra escanear com o número novo.
+                </li>
+              </ol>
             </div>
           )}
 
