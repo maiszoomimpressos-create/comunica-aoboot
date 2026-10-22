@@ -1,4 +1,4 @@
-import { generateText, isStepCount, tool, transcribe, type ModelMessage } from "ai";
+import { generateSpeech, generateText, isStepCount, tool, transcribe, type ModelMessage } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import { decryptSecret } from "@/lib/crypto/secret-box";
@@ -63,6 +63,22 @@ async function transcribeAudio(audioUrl: string): Promise<string | null> {
       },
     });
     return result.text.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Text-to-speech for the reply, used only when the inbound message was
+ * itself voice (mirrors the customer's own channel — see
+ * handleInboundMessage). `null` on any failure, same degrade-to-text
+ * convention as transcribeAudio; never blocks the reply. Goes through the
+ * AI Gateway (OpenAI has no BYOK-vs-credits issue like Anthropic did —
+ * works on the free tier, confirmed this session for other OpenAI
+ * models). */
+async function synthesizeSpeech(text: string): Promise<string | null> {
+  try {
+    const { audio } = await generateSpeech({ model: "openai/tts-1", text, voice: "alloy" });
+    return `data:${audio.mediaType};base64,${audio.base64}`;
   } catch {
     return null;
   }
@@ -167,6 +183,7 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
   const conversation = await getOrCreateActiveBotConversation(connectionId, fromPhone);
   if (conversation.status === "ESCALATED") return;
 
+  const inboundWasAudio = "audioUrl" in input;
   const text = "text" in input ? input.text : await transcribeAudio(input.audioUrl);
   if (!text) {
     const fallback = "Não consegui entender o áudio, pode escrever a mensagem?";
@@ -201,7 +218,12 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
       ? "Só um momento, vou te transferir para um atendente humano."
       : "Desculpe, não entendi. Pode repetir?");
 
-  await provider.sendMessage(providerConfig, fromPhone, replyText);
+  const replyAudio = inboundWasAudio ? await synthesizeSpeech(replyText) : null;
+  if (replyAudio) {
+    await provider.sendAudio(providerConfig, fromPhone, replyAudio);
+  } else {
+    await provider.sendMessage(providerConfig, fromPhone, replyText);
+  }
 
   await createBotMessage(conversation.id, "OUT", replyText);
   if (escalated) {

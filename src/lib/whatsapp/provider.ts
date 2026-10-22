@@ -46,6 +46,15 @@ export interface WhatsappProvider {
     video: string,
     caption?: string
   ): Promise<SendMessageResult>;
+  /** Same contract as `sendImage`/`sendVideo` — `audio` is a URL or a
+   * `data:audio/...;base64,...` data URI. Used by the AI attendant to
+   * reply with a voice note when the inbound message itself was voice
+   * (see bot-attendant.service.ts). */
+  sendAudio(
+    config: WhatsappConnectionConfig,
+    to: string,
+    audio: string
+  ): Promise<SendMessageResult>;
   /** Best-effort bulk fetch of every contact saved in the connected
    * WhatsApp's own address book — used by the Campanhas module to seed
    * `Contact` rows (see contact.repository.ts's syncContactsFromProvider).

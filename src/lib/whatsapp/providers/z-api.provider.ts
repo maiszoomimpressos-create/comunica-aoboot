@@ -483,6 +483,19 @@ export class ZApiProvider implements WhatsappProvider {
     });
   }
 
+  /** `send-audio` — sibling endpoint of `send-image`/`send-video`, same
+   * envelope. **Not yet confirmed against a real Z-API instance** (same
+   * caveat as `sendVideo`) — used by the AI attendant's voice-reply
+   * feature; validated live the first time a voice-in/voice-out round
+   * trip is tested. */
+  async sendAudio(
+    config: WhatsappConnectionConfig,
+    to: string,
+    audio: string
+  ): Promise<SendMessageResult> {
+    return this.postJson(config, "send-audio", { phone: to, audio });
+  }
+
   /** Shared POST-JSON-parse-response plumbing behind send-text/send-image —
    * same endpoint family, same response envelope ({ zaapId, messageId, id }
    * on success), only the path and body differ. */
