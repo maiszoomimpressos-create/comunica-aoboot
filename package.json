@@ -23,6 +23,7 @@
     "postinstall": "prisma generate"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.85",
     "@base-ui/react": "^1.7.0",
     "@hookform/resolvers": "^5.7.1",
     "@prisma/adapter-pg": "^7.9.1",

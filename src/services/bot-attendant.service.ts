@@ -1,4 +1,5 @@
 import { generateText, isStepCount, tool, transcribe, type ModelMessage } from "ai";
+import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import { decryptSecret } from "@/lib/crypto/secret-box";
 import { getWhatsappProvider } from "@/lib/whatsapp/registry";
@@ -90,6 +91,22 @@ async function buscarEndereco(endereco: string): Promise<
   }
 }
 
+/** Resolve o modelo configurado no Super Admin (string "provider/model" do
+ * AI Gateway) pra uma chamada direta à Anthropic quando `ANTHROPIC_API_KEY`
+ * está disponível — evita depender de crédito pago no AI Gateway da Vercel
+ * quando já existe saldo direto na conta da Anthropic. Fora do caso
+ * "anthropic/...", ou sem a chave, usa a string normalmente via Gateway.
+ * Conversão de ID: a Anthropic usa hífen em vez de ponto na versão (ex:
+ * "anthropic/claude-haiku-5.5" -> "claude-haiku-5-5"), confirmado contra
+ * GET /v1/models da própria Anthropic. */
+function resolveModel(modelString: string) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey || !modelString.startsWith("anthropic/")) return modelString;
+
+  const anthropicModelId = modelString.slice("anthropic/".length).replaceAll(".", "-");
+  return anthropic(anthropicModelId);
+}
+
 function buildTools() {
   const tools = {
     escalarParaHumano: tool({
@@ -159,7 +176,7 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
   const settings = await getAiAttendantSettings();
 
   const result = await generateText({
-    model: settings.model,
+    model: resolveModel(settings.model),
     instructions: buildSystemPrompt(config.businessProfile),
     messages,
     tools: buildTools(),

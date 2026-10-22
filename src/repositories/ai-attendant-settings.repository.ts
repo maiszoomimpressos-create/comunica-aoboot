@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db/prisma";
 
-const DEFAULT_MODEL = "anthropic/claude-sonnet-5.5";
+const DEFAULT_MODEL = "anthropic/claude-haiku-5.5";
 
 /** Singleton row (no natural key to scope by — platform-wide, not
  * per-tenant) controlling which AI Gateway model the attendant bot uses.

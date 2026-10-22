@@ -778,7 +778,7 @@ model BotMessage {
 // /admin/whatsapp, não pelo tenant, pra poder trocar de modelo sem deploy.
 model AiAttendantSettings {
   id        String   @id @default(cuid())
-  model     String   @default("anthropic/claude-sonnet-5.5")
+  model     String   @default("anthropic/claude-haiku-5.5")
   updatedAt DateTime @updatedAt
 
   @@map("ai_attendant_settings")
