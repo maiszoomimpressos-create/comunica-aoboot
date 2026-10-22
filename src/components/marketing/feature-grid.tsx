@@ -1,6 +1,6 @@
-import { Building2, ShieldCheck, LayoutGrid, Users } from "lucide-react";
+import { Building2, ShieldCheck, LayoutGrid, Users, type LucideIcon } from "lucide-react";
 
-const FEATURES = [
+const FEATURES: Array<{ icon: LucideIcon; title: string; description: string }> = [
   {
     icon: Building2,
     title: "Multiempresa",
@@ -25,7 +25,15 @@ const FEATURES = [
     description:
       "Convide sua equipe, atribua papéis e acompanhe tudo num painel único por empresa.",
   },
-] as const;
+];
+
+function FeatureVisual({ icon: Icon }: { icon: LucideIcon }) {
+  return (
+    <div className="flex aspect-[4/3] w-full items-center justify-center rounded-2xl border border-border bg-card">
+      <Icon className="size-14 text-primary" strokeWidth={1.5} />
+    </div>
+  );
+}
 
 export function FeatureGrid() {
   return (
@@ -40,17 +48,26 @@ export function FeatureGrid() {
         </p>
       </div>
 
-      <div className="mt-14 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        {FEATURES.map((feature) => (
-          <div
-            key={feature.title}
-            className="rounded-xl border border-border bg-card p-6"
-          >
-            <feature.icon className="size-6 text-primary" />
-            <h3 className="mt-4 font-medium">{feature.title}</h3>
-            <p className="mt-2 text-sm text-muted-foreground">{feature.description}</p>
-          </div>
-        ))}
+      <div className="mt-16 flex flex-col gap-20">
+        {FEATURES.map((feature, index) => {
+          const reversed = index % 2 === 1;
+          return (
+            <div
+              key={feature.title}
+              className={`flex flex-col items-center gap-10 lg:flex-row lg:gap-16 ${
+                reversed ? "lg:flex-row-reverse" : ""
+              }`}
+            >
+              <div className="w-full max-w-md flex-1">
+                <FeatureVisual icon={feature.icon} />
+              </div>
+              <div className="w-full max-w-md flex-1 text-left">
+                <h3 className="text-xl font-semibold tracking-tight">{feature.title}</h3>
+                <p className="mt-3 text-muted-foreground">{feature.description}</p>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </section>
   );
