@@ -111,17 +111,29 @@ async function transcribeAudio(audioUrl: string): Promise<string | null> {
  * itself voice (mirrors the customer's own channel — see
  * handleInboundMessage). `null` on any failure, same degrade-to-text
  * convention as transcribeAudio; never blocks the reply. Goes through the
- * AI Gateway (OpenAI has no BYOK-vs-credits issue like Anthropic did —
- * works on the free tier, confirmed this session for other OpenAI
- * models).
+ * AI Gateway.
  *
- * `speed` below the 1.0 default (confirmed in Z-API's own docs: it just
- * wants `data:audio/mpeg;base64,...`, same mp3 we already send — not a
- * format/sample-rate mismatch) because the default read of our short,
- * punchy replies came across as rushed on a real WhatsApp voice note. */
+ * Switched from openai/tts-1 ("alloy") to microsoft/mai-voice-2-flash with
+ * the native "pt-BR-Luana" voice — alloy is tuned for English and read as
+ * noticeably unnatural in Portuguese, which was almost certainly the real
+ * "estranho" complaint, more than pacing. `providerOptions.microsoft` (not
+ * `.azure` — confirmed by hitting "invalid azure provider options" until
+ * keying it by the Gateway's own provider name instead) carries the
+ * style/speed knobs this model actually accepts; `style: "chat"` is
+ * Azure's conversational delivery, the closest match to "fale como uma
+ * pessoa de verdade atendendo o telefone" already in the base prompt.
+ * `outputFormat: "mp3"` keeps the exact same `audio/mpeg` data URI Z-API's
+ * docs expect — confirmed this model still returns that, unlike Google's
+ * Gemini TTS options which only offer wav/pcm/mulaw/alaw. */
 async function synthesizeSpeech(text: string): Promise<string | null> {
   try {
-    const { audio } = await generateSpeech({ model: "openai/tts-1", text, voice: "alloy", speed: 0.88 });
+    const { audio } = await generateSpeech({
+      model: "microsoft/mai-voice-2-flash",
+      text,
+      voice: "pt-BR-Luana",
+      outputFormat: "mp3",
+      providerOptions: { microsoft: { style: "chat", speed: 0.92 } },
+    });
     return `data:${audio.mediaType};base64,${audio.base64}`;
   } catch {
     return null;
