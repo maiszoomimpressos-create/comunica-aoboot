@@ -8,10 +8,24 @@ import type {
   ProviderContact,
   ProviderGroup,
   QrCodeResult,
+  SendMessageOptions,
   SendMessageResult,
   TestConnectionResult,
   WhatsappConnectionConfig,
 } from "../types";
+
+/** Z-API only accepts 1-15 for both delay fields — out-of-range values are
+ * silently ignored by the API, so clamp here instead of trusting callers. */
+function clampDelaySeconds(seconds: number): number {
+  return Math.min(15, Math.max(1, Math.round(seconds)));
+}
+
+function delayFields(options?: SendMessageOptions): Record<string, number> {
+  const fields: Record<string, number> = {};
+  if (options?.delayTyping !== undefined) fields.delayTyping = clampDelaySeconds(options.delayTyping);
+  if (options?.delayMessage !== undefined) fields.delayMessage = clampDelaySeconds(options.delayMessage);
+  return fields;
+}
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -449,9 +463,10 @@ export class ZApiProvider implements WhatsappProvider {
   async sendMessage(
     config: WhatsappConnectionConfig,
     to: string,
-    text: string
+    text: string,
+    options?: SendMessageOptions
   ): Promise<SendMessageResult> {
-    return this.postJson(config, "send-text", { phone: to, message: text });
+    return this.postJson(config, "send-text", { phone: to, message: text, ...delayFields(options) });
   }
 
   async sendImage(
@@ -491,9 +506,10 @@ export class ZApiProvider implements WhatsappProvider {
   async sendAudio(
     config: WhatsappConnectionConfig,
     to: string,
-    audio: string
+    audio: string,
+    options?: SendMessageOptions
   ): Promise<SendMessageResult> {
-    return this.postJson(config, "send-audio", { phone: to, audio });
+    return this.postJson(config, "send-audio", { phone: to, audio, ...delayFields(options) });
   }
 
   /** Shared POST-JSON-parse-response plumbing behind send-text/send-image —

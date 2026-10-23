@@ -5,6 +5,7 @@ import type {
   ListContactsResult,
   ListGroupsResult,
   QrCodeResult,
+  SendMessageOptions,
   SendMessageResult,
   TestConnectionResult,
   WhatsappConnectionConfig,
@@ -26,7 +27,8 @@ export interface WhatsappProvider {
   sendMessage(
     config: WhatsappConnectionConfig,
     to: string,
-    text: string
+    text: string,
+    options?: SendMessageOptions
   ): Promise<SendMessageResult>;
   /** `image` is a URL or a `data:image/...;base64,...` data URI — never a raw Buffer,
    * so every provider implementation can pass it straight through to its own API. */
@@ -53,7 +55,8 @@ export interface WhatsappProvider {
   sendAudio(
     config: WhatsappConnectionConfig,
     to: string,
-    audio: string
+    audio: string,
+    options?: SendMessageOptions
   ): Promise<SendMessageResult>;
   /** Best-effort bulk fetch of every contact saved in the connected
    * WhatsApp's own address book — used by the Campanhas module to seed

@@ -45,6 +45,17 @@ export interface SendMessageResult {
   raw?: unknown;
 }
 
+/** Optional per-send pacing, forwarded as-is to the provider. Z-API shows
+ * "Digitando..."/"Gravando áudio..." to the recipient for `delayTyping`
+ * seconds (1-15) before the message lands, then waits `delayMessage`
+ * seconds (1-15) more before it's actually delivered — used by the AI
+ * attendant so a reply doesn't appear instantly, which reads as
+ * unmistakably robotic (see bot-attendant.service.ts). */
+export interface SendMessageOptions {
+  delayTyping?: number;
+  delayMessage?: number;
+}
+
 export interface QrCodeResult {
   ok: boolean;
   /** `data:image/png;base64,...` data URI, present only when ok. */

@@ -29,6 +29,16 @@ import {
 // depois destino, etc.) sem deixar o prompt crescer sem limite.
 const HISTORY_LIMIT = 20;
 
+/** How long the recipient sees "Digitando..."/"Gravando áudio..." before
+ * the reply lands — a reply that appears the instant the webhook responds
+ * reads as unmistakably robotic. Scaled to the reply's length (longer
+ * reply, longer apparent "typing") and clamped to Z-API's own 1-15s range
+ * for `delayTyping` (see z-api.provider.ts); floored at 2s since anything
+ * shorter is imperceptible. */
+function typingDelaySeconds(text: string): number {
+  return Math.min(15, Math.max(2, Math.round(text.length / 12)));
+}
+
 /** Fallback usado só quando o `BotConfig` do tenant não tem nenhuma
  * `BotVertical` escolhida ainda (ex: configurado antes dessa coluna
  * existir) — o catálogo de verticais (mobilidade, delivery, ...), com o
@@ -216,14 +226,18 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
   const provider = getWhatsappProvider(credentials.provider.key);
   const providerConfig = { apiUrl: credentials.apiUrl, apiToken, phoneNumber: credentials.phoneNumber };
 
+  // Always ACTIVE by the time it comes back — getOrCreateActiveBotConversation
+  // reopens a previously ESCALATED thread too, since a new inbound message
+  // here means the customer needs help again.
   const conversation = await getOrCreateActiveBotConversation(connectionId, fromPhone);
-  if (conversation.status === "ESCALATED") return;
 
   const inboundWasAudio = "audioUrl" in input;
   const text = "text" in input ? input.text : await transcribeAudio(input.audioUrl);
   if (!text) {
     const fallback = "Não consegui entender o áudio, pode escrever a mensagem?";
-    await provider.sendMessage(providerConfig, fromPhone, fallback);
+    await provider.sendMessage(providerConfig, fromPhone, fallback, {
+      delayTyping: typingDelaySeconds(fallback),
+    });
     await createBotMessage(conversation.id, "OUT", fallback);
     await touchBotConversation(conversation.id);
     return;
@@ -257,10 +271,11 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
       : "Desculpe, não entendi. Pode repetir?");
 
   const replyAudio = inboundWasAudio ? await synthesizeSpeech(replyText) : null;
+  const delayTyping = typingDelaySeconds(replyText);
   if (replyAudio) {
-    await provider.sendAudio(providerConfig, fromPhone, replyAudio);
+    await provider.sendAudio(providerConfig, fromPhone, replyAudio, { delayTyping });
   } else {
-    await provider.sendMessage(providerConfig, fromPhone, replyText);
+    await provider.sendMessage(providerConfig, fromPhone, replyText, { delayTyping });
   }
 
   await createBotMessage(conversation.id, "OUT", replyText);

@@ -41,8 +41,14 @@ export function upsertBotConfig(
 }
 
 /** One conversation per (connection, contact phone) — reused across turns so
- * the bot keeps context. Reopens a CLOSED thread as ACTIVE on a new inbound
- * message; leaves ESCALATED alone (see bot-attendant.service.ts). */
+ * the bot keeps context. Reopens a CLOSED *or* ESCALATED thread as ACTIVE on
+ * a new inbound message: ESCALATED used to stick forever (no code anywhere
+ * ever moved it back), which silently muted the bot for that phone number
+ * for good after a single handoff — confirmed in production, a contact
+ * escalated hours earlier got zero reply to a brand new message. A new
+ * message is read as "the customer needs help again", not "resume the old
+ * request", so the bot picking it back up is the right default even if a
+ * human happens to still be mid-handoff on WhatsApp itself. */
 export async function getOrCreateActiveBotConversation(connectionId: string, contactPhone: string) {
   const existing = await prisma.botConversation.findUnique({
     where: { connectionId_contactPhone: { connectionId, contactPhone } },
@@ -50,7 +56,7 @@ export async function getOrCreateActiveBotConversation(connectionId: string, con
   if (!existing) {
     return prisma.botConversation.create({ data: { connectionId, contactPhone } });
   }
-  if (existing.status === "CLOSED") {
+  if (existing.status === "CLOSED" || existing.status === "ESCALATED") {
     return prisma.botConversation.update({
       where: { id: existing.id },
       data: { status: "ACTIVE" },
