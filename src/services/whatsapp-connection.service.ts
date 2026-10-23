@@ -1,4 +1,5 @@
 import QRCode from "qrcode";
+import { after } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { encryptSecret, decryptSecret } from "@/lib/crypto/secret-box";
 import { generateApiKey, hashApiKey } from "@/lib/whatsapp/api-key";
@@ -512,19 +513,29 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
 /** Called by the public webhook route after verifying the secret. Always
  * persists the raw payload first (see WebhookEvent's schema comment:
  * interpreting these is still mostly future work, this is the log
- * everything else reads from) — connection-status events and inbound
- * messages are the exceptions acted on directly, see
- * applyConnectionStatusFromWebhook / maybeHandleInboundBotMessage.
- * Never throws on a malformed/unexpected payload shape — a webhook
- * endpoint must always ack fast. */
+ * everything else reads from) — connection-status events are applied
+ * directly, see applyConnectionStatusFromWebhook. Never throws on a
+ * malformed/unexpected payload shape — a webhook endpoint must always ack
+ * fast.
+ *
+ * The bot attendant pipeline (transcription + LLM + TTS + send, chained
+ * sequentially) is deliberately NOT awaited here: it used to run inline,
+ * which meant the HTTP response to Z-API didn't go out until the entire
+ * AI round-trip finished. In production that silently dropped at least two
+ * real audio messages with zero DB trace — the same inputs replayed fine
+ * locally, pointing at a platform-level kill (timeout/cold start) rather
+ * than a code bug. `after()` defers it until the response is already sent,
+ * using Vercel's waitUntil to keep the function alive in the background. */
 export async function recordWebhookEvent(connectionId: string, payload: unknown): Promise<void> {
   await createWebhookEvent(connectionId, "z-api", payload);
   await applyConnectionStatusFromWebhook(connectionId, payload).catch((err) => {
     console.error("Failed to apply connection status from webhook:", err);
   });
-  await maybeHandleInboundBotMessage(connectionId, payload).catch((err) => {
-    console.error("Failed to run bot attendant on inbound message:", err);
-  });
+  after(() =>
+    maybeHandleInboundBotMessage(connectionId, payload).catch((err) => {
+      console.error("Failed to run bot attendant on inbound message:", err);
+    })
+  );
 }
 
 export interface PurchaseConfirmationInput {
