@@ -50,11 +50,16 @@ export function upsertBotConfig(
  * request", so the bot picking it back up is the right default even if a
  * human happens to still be mid-handoff on WhatsApp itself.
  *
- * `reopenedFrom` tells the caller which state it reopened from, not just
- * that it did — confirmed in practice that without dropping pre-reopen
- * history, the old "já passei pro atendente humano" turn stays in context
- * and the model re-escalates almost immediately on the very next message.
- * Reopening from ESCALATED additionally needs the check-in behavior (see
+ * Reopening also bumps `contextStartAt` to now — the actual, persistent
+ * "don't look before this" boundary `listRecentBotMessages`' result gets
+ * filtered against on *every* turn (see handleInboundMessage), not just
+ * this one. An earlier version only filtered history on the literal
+ * reopening turn, which confirmed-broke one turn later: the very next
+ * message after a reopen pulled the raw last-20 again, dragging an
+ * already-closed request straight back into context.
+ *
+ * `reopenedFrom` tells the caller which state it reopened from — reopening
+ * from ESCALATED additionally needs the check-in behavior (see
  * handleInboundMessage): the old request might genuinely still be
  * unresolved, so the bot asks instead of assuming either way — that's why
  * `pendingRequestSummary` deliberately survives an ESCALATED reopen and is
@@ -74,7 +79,7 @@ export async function getOrCreateActiveBotConversation(
     const reopenedFrom = existing.status;
     const reopened = await prisma.botConversation.update({
       where: { id: existing.id },
-      data: { status: "ACTIVE" },
+      data: { status: "ACTIVE", contextStartAt: new Date() },
     });
     return { ...reopened, reopenedFrom };
   }
@@ -84,7 +89,10 @@ export async function getOrCreateActiveBotConversation(
 /** Escalates to a human, storing a short summary of the pending request
  * (from the model's own `escalarParaHumano` tool call) so a later reopen
  * can ask "isso já foi atendido?" instead of guessing — see
- * getOrCreateActiveBotConversation and the `encerrarPedido` tool. */
+ * getOrCreateActiveBotConversation and the `encerrarPedido` tool. Doesn't
+ * touch `contextStartAt`: the messages leading up to this escalation are
+ * still relevant to it, the staleness problem only starts once the
+ * conversation reopens later. */
 export function escalateBotConversation(conversationId: string, pendingRequestSummary: string | null) {
   return prisma.botConversation.update({
     where: { id: conversationId },
@@ -93,12 +101,14 @@ export function escalateBotConversation(conversationId: string, pendingRequestSu
 }
 
 /** Marks the pending request resolved — called from the `encerrarPedido`
- * tool once the customer confirms. Clears `pendingRequestSummary` too: the
- * next reopen (from CLOSED) is a true clean slate, no check-in needed. */
+ * tool once the customer confirms. Clears `pendingRequestSummary` and also
+ * bumps `contextStartAt`: the moment it's closed, nothing before it should
+ * bleed into whatever the customer brings up next, even within the same
+ * turn's reply. */
 export function closeBotConversation(conversationId: string) {
   return prisma.botConversation.update({
     where: { id: conversationId },
-    data: { status: "CLOSED", pendingRequestSummary: null, lastMessageAt: new Date() },
+    data: { status: "CLOSED", pendingRequestSummary: null, contextStartAt: new Date(), lastMessageAt: new Date() },
   });
 }
 

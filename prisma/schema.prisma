@@ -806,6 +806,16 @@ model BotConversation {
   // pedido é encerrado (ferramenta encerrarPedido) ou a conversa reabre.
   pendingRequestSummary String?
 
+  // Mensagens com `createdAt` antes disso nunca entram no histórico
+  // mandado pro modelo (ver listRecentBotMessages + o filtro em
+  // handleInboundMessage) — avança pra `now()` sempre que a conversa
+  // reabre (CLOSED/ESCALATED -> ACTIVE) ou um pedido é encerrado.
+  // Sem isso, o filtro de limpeza só valia no exato turno da reabertura:
+  // na mensagem seguinte o histórico cru voltava a trazer o pedido antigo
+  // (confirmado em produção — a IA voltou a falar de uma corrida já
+  // encerrada dois turnos depois de supostamente ter "esquecido" dela).
+  contextStartAt DateTime @default(now())
+
   connectionId String
   connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 

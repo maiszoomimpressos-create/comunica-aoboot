@@ -395,13 +395,14 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
   const generated = await (async () => {
     try {
       const history = await listRecentBotMessages(conversation.id, HISTORY_LIMIT);
-      // Thread reopened from CLOSED/ESCALATED: drop everything before the
-      // reactivation (conversation.updatedAt just got bumped by that status
-      // flip) so the model doesn't see the old "já passei pro atendente
-      // humano" turn and re-escalate on the spot for an unrelated new message.
-      const relevantHistory = conversation.reopenedFrom
-        ? history.filter((message) => message.createdAt >= conversation.updatedAt)
-        : history;
+      // Filtra por `contextStartAt` em TODO turno, não só no da reabertura —
+      // confirmado em produção que um filtro de turno único (baseado em
+      // reopenedFrom) deixava o turno seguinte voltar a arrastar um pedido
+      // já encerrado, porque listRecentBotMessages por si só não sabe de
+      // nenhum "corte". `contextStartAt` é um campo persistido (ver
+      // getOrCreateActiveBotConversation/closeBotConversation) que avança
+      // sempre que a conversa reabre ou um pedido é encerrado.
+      const relevantHistory = history.filter((message) => message.createdAt >= conversation.contextStartAt);
       const messages: ModelMessage[] = relevantHistory.map((message) => ({
         role: message.direction === "IN" ? "user" : "assistant",
         content: message.body,
