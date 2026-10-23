@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
-import { Prisma, type BotConversationStatus, type BotMessageDirection } from "@/generated/prisma/client";
+import { Prisma, type BotMessageDirection } from "@/generated/prisma/client";
 
 export function getBotConfig(connectionId: string) {
   return prisma.botConfig.findUnique({
@@ -50,36 +50,55 @@ export function upsertBotConfig(
  * request", so the bot picking it back up is the right default even if a
  * human happens to still be mid-handoff on WhatsApp itself.
  *
- * `reopened: true` tells the caller to drop the pre-reactivation history
- * from what's fed to the model — confirmed in practice that without this,
- * the old "já passei pro atendente humano" turn stays in context and the
- * model re-escalates almost immediately on the very next message, making a
- * reopened thread look stuck all over again. */
+ * `reopenedFrom` tells the caller which state it reopened from, not just
+ * that it did — confirmed in practice that without dropping pre-reopen
+ * history, the old "já passei pro atendente humano" turn stays in context
+ * and the model re-escalates almost immediately on the very next message.
+ * Reopening from ESCALATED additionally needs the check-in behavior (see
+ * handleInboundMessage): the old request might genuinely still be
+ * unresolved, so the bot asks instead of assuming either way — that's why
+ * `pendingRequestSummary` deliberately survives an ESCALATED reopen and is
+ * only cleared by `closeBotConversation`. */
 export async function getOrCreateActiveBotConversation(
   connectionId: string,
   contactPhone: string
-): Promise<Prisma.BotConversationGetPayload<object> & { reopened: boolean }> {
+): Promise<Prisma.BotConversationGetPayload<object> & { reopenedFrom: "CLOSED" | "ESCALATED" | null }> {
   const existing = await prisma.botConversation.findUnique({
     where: { connectionId_contactPhone: { connectionId, contactPhone } },
   });
   if (!existing) {
     const created = await prisma.botConversation.create({ data: { connectionId, contactPhone } });
-    return { ...created, reopened: false };
+    return { ...created, reopenedFrom: null };
   }
   if (existing.status === "CLOSED" || existing.status === "ESCALATED") {
+    const reopenedFrom = existing.status;
     const reopened = await prisma.botConversation.update({
       where: { id: existing.id },
       data: { status: "ACTIVE" },
     });
-    return { ...reopened, reopened: true };
+    return { ...reopened, reopenedFrom };
   }
-  return { ...existing, reopened: false };
+  return { ...existing, reopenedFrom: null };
 }
 
-export function setBotConversationStatus(conversationId: string, status: BotConversationStatus) {
+/** Escalates to a human, storing a short summary of the pending request
+ * (from the model's own `escalarParaHumano` tool call) so a later reopen
+ * can ask "isso já foi atendido?" instead of guessing — see
+ * getOrCreateActiveBotConversation and the `encerrarPedido` tool. */
+export function escalateBotConversation(conversationId: string, pendingRequestSummary: string | null) {
   return prisma.botConversation.update({
     where: { id: conversationId },
-    data: { status, lastMessageAt: new Date() },
+    data: { status: "ESCALATED", pendingRequestSummary, lastMessageAt: new Date() },
+  });
+}
+
+/** Marks the pending request resolved — called from the `encerrarPedido`
+ * tool once the customer confirms. Clears `pendingRequestSummary` too: the
+ * next reopen (from CLOSED) is a true clean slate, no check-in needed. */
+export function closeBotConversation(conversationId: string) {
+  return prisma.botConversation.update({
+    where: { id: conversationId },
+    data: { status: "CLOSED", pendingRequestSummary: null, lastMessageAt: new Date() },
   });
 }
 

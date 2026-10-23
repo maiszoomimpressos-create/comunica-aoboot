@@ -798,6 +798,14 @@ model BotConversation {
   createdAt     DateTime              @default(now())
   updatedAt     DateTime              @updatedAt
 
+  // Resumo curto do pedido em aberto no momento em que a IA escalou pra um
+  // humano (ex: "Corrida de Rua X, 580 para Rua Y, 179") — preenchido pela
+  // própria IA via o campo `resumoPedido` da ferramenta escalarParaHumano.
+  // Usado só pra retomar o assunto quando o cliente escreve de novo (ver
+  // handleInboundMessage em bot-attendant.service.ts); limpo quando o
+  // pedido é encerrado (ferramenta encerrarPedido) ou a conversa reabre.
+  pendingRequestSummary String?
+
   connectionId String
   connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 

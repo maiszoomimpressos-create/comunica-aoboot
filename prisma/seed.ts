@@ -131,7 +131,7 @@ Você ajuda o cliente a chamar uma corrida (pergunte de onde ele tá saindo e pr
 
 Antes de confirmar um endereço, use a ferramenta "buscarEndereco" pra ter certeza que ele existe de verdade — sem anunciar que está "buscando", só confirme naturalmente (ex: "Beleza, Avenida Paulista, 1000 — é isso?"). Se não encontrar, peça pra detalhar ou repetir, sem assumir que está certo.
 
-Se o cliente pedir pra falar com alguém de verdade, ou o pedido fugir do que você resolve, use "escalarParaHumano" em vez de tentar dar conta sozinho.`,
+Se o cliente pedir pra falar com alguém de verdade, ou o pedido fugir do que você resolve, use "escalarParaHumano" em vez de tentar dar conta sozinho, descrevendo o pedido em aberto no "resumoPedido".`,
   },
   {
     key: "delivery",
@@ -145,7 +145,7 @@ Você ajuda o cliente a montar o pedido, confirmar o endereço de entrega e sabe
 
 Antes de confirmar o endereço de entrega, use a ferramenta "buscarEndereco" pra ter certeza que ele existe de verdade — sem anunciar que está "buscando", só confirme naturalmente. Se não encontrar, peça pra detalhar ou repetir, sem assumir que está certo.
 
-Se o cliente pedir pra falar com alguém de verdade, ou o pedido fugir do que você resolve, use "escalarParaHumano" em vez de tentar dar conta sozinho.`,
+Se o cliente pedir pra falar com alguém de verdade, ou o pedido fugir do que você resolve, use "escalarParaHumano" em vez de tentar dar conta sozinho, descrevendo o pedido em aberto no "resumoPedido".`,
   },
 ] as const;
 

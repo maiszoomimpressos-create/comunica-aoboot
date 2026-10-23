@@ -21,7 +21,8 @@ import { logBotEvent, serializeError } from "@/lib/logging/bot-attendant-logger"
 import {
   getBotConfig,
   getOrCreateActiveBotConversation,
-  setBotConversationStatus,
+  escalateBotConversation,
+  closeBotConversation,
   touchBotConversation,
   createBotMessage,
   listRecentBotMessages,
@@ -54,12 +55,25 @@ Você ajuda o cliente a chamar uma corrida (pergunte de onde ele tá saindo e pr
 
 Antes de confirmar um endereço, use a ferramenta "buscarEndereco" pra ter certeza que ele existe de verdade — sem anunciar que está "buscando", só confirme naturalmente (ex: "Beleza, Avenida Paulista, 1000 — é isso?"). Se não encontrar, peça pra detalhar ou repetir, sem assumir que está certo.
 
-Se o cliente pedir pra falar com alguém de verdade, ou o pedido fugir do que você resolve, use "escalarParaHumano" em vez de tentar dar conta sozinho.`;
+Se o cliente pedir pra falar com alguém de verdade, ou o pedido fugir do que você resolve, use "escalarParaHumano" em vez de tentar dar conta sozinho, descrevendo o pedido em aberto no "resumoPedido".`;
 
-function buildSystemPrompt(verticalPrompt: string | null, businessProfile: string | null): string {
+/** `pendingRequestSummary` only passed in when the conversation just
+ * reopened from ESCALATED (see handleInboundMessage) — the previous
+ * request may genuinely still be unresolved, so the model is told to
+ * check instead of either assuming it's done (old bug: silently moved on)
+ * or assuming it's still open (confirmed in production: re-escalated an
+ * unrelated new message because the old handoff was still in context). */
+function buildSystemPrompt(
+  verticalPrompt: string | null,
+  businessProfile: string | null,
+  pendingRequestSummary?: string | null
+): string {
   const base = verticalPrompt?.trim() || BASE_SYSTEM_PROMPT;
-  if (!businessProfile?.trim()) return base;
-  return `${base}\n\nInformações desta empresa:\n${businessProfile.trim()}`;
+  const withProfile = businessProfile?.trim()
+    ? `${base}\n\nInformações desta empresa:\n${businessProfile.trim()}`
+    : base;
+  if (!pendingRequestSummary) return withProfile;
+  return `${withProfile}\n\nEsse cliente tinha uma solicitação em aberto, já passada pra um atendente humano: "${pendingRequestSummary}". Antes de atender o que ele disser agora, pergunte se essa solicitação já foi atendida. Se ele confirmar que sim, use a ferramenta "encerrarPedido" e siga normalmente. Se ainda não foi atendida, ou se ele trouxer um assunto totalmente novo, atenda o que ele pedir sem insistir no ponto.`;
 }
 
 export type HandleInboundMessageInput = { connectionId: string; fromPhone: string } & (
@@ -197,7 +211,18 @@ function buildTools() {
         'Transfere a conversa para um atendente humano. Use quando o cliente pedir explicitamente, ou quando o pedido estiver fora do que você consegue resolver.',
       inputSchema: z.object({
         motivo: z.string().describe("Breve motivo da transferência."),
+        resumoPedido: z
+          .string()
+          .describe(
+            'Resumo curto do pedido em aberto (tipo de pedido + origem/destino, se já souber) — ex: "Corrida de Rua X, 580 para Rua Y, 179". Usado pra retomar o assunto se o cliente escrever de novo depois.'
+          ),
       }),
+      execute: async () => ({ ok: true }),
+    }),
+    encerrarPedido: tool({
+      description:
+        'Encerra a solicitação em aberto que já tinha sido passada pra um atendente humano. Use só depois que o cliente confirmar explicitamente que ela já foi atendida/resolvida.',
+      inputSchema: z.object({}),
       execute: async () => ({ ok: true }),
     }),
   };
@@ -281,8 +306,13 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
   // reopens a previously ESCALATED thread too, since a new inbound message
   // here means the customer needs help again.
   const conversation = await getOrCreateActiveBotConversation(connectionId, fromPhone);
-  if (conversation.reopened) {
-    await logBotEvent("info", "conversation_reopened", { connectionId, fromPhone, conversationId: conversation.id });
+  if (conversation.reopenedFrom) {
+    await logBotEvent("info", "conversation_reopened", {
+      connectionId,
+      fromPhone,
+      conversationId: conversation.id,
+      reopenedFrom: conversation.reopenedFrom,
+    });
   }
 
   const inboundWasAudio = "audioUrl" in input;
@@ -309,7 +339,7 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
       // reactivation (conversation.updatedAt just got bumped by that status
       // flip) so the model doesn't see the old "já passei pro atendente
       // humano" turn and re-escalate on the spot for an unrelated new message.
-      const relevantHistory = conversation.reopened
+      const relevantHistory = conversation.reopenedFrom
         ? history.filter((message) => message.createdAt >= conversation.updatedAt)
         : history;
       const messages: ModelMessage[] = relevantHistory.map((message) => ({
@@ -317,9 +347,19 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
         content: message.body,
       }));
 
+      // Só pede confirmação de "isso já foi atendido?" quando reabriu de um
+      // ESCALATED com um resumo guardado — reabrir de CLOSED já é um
+      // recomeço de verdade (ninguém deixou nada pendente).
+      const pendingRequestSummary =
+        conversation.reopenedFrom === "ESCALATED" ? conversation.pendingRequestSummary : null;
+
       const result = await generateText({
         model: resolveModel(settings.model),
-        instructions: buildSystemPrompt(config.vertical?.systemPrompt ?? null, config.businessProfile),
+        instructions: buildSystemPrompt(
+          config.vertical?.systemPrompt ?? null,
+          config.businessProfile,
+          pendingRequestSummary
+        ),
         messages,
         tools: buildTools(),
         stopWhen: isStepCount(6),
@@ -343,7 +383,9 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
 
   await recordChatUsage(connectionId, settings.model, result.usage);
 
-  const escalated = result.toolCalls.some((call) => call.toolName === "escalarParaHumano");
+  const escalatedCall = result.toolCalls.find((call) => call.toolName === "escalarParaHumano");
+  const closedCall = result.toolCalls.find((call) => call.toolName === "encerrarPedido");
+  const escalated = !!escalatedCall;
   const replyText =
     result.text.trim() ||
     (escalated
@@ -379,8 +421,12 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
   }
 
   await createBotMessage(conversation.id, "OUT", replyText);
-  if (escalated) {
-    await setBotConversationStatus(conversation.id, "ESCALATED");
+  if (escalatedCall) {
+    const resumoPedido = (escalatedCall.input as { resumoPedido?: string }).resumoPedido ?? null;
+    await escalateBotConversation(conversation.id, resumoPedido);
+  } else if (closedCall) {
+    await closeBotConversation(conversation.id);
+    await logBotEvent("info", "pending_request_closed", { connectionId, fromPhone, conversationId: conversation.id });
   } else {
     await touchBotConversation(conversation.id);
   }
