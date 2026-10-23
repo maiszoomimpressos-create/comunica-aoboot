@@ -47,36 +47,85 @@ function typingDelaySeconds(text: string): number {
  * `BotVertical` escolhida ainda (ex: configurado antes dessa coluna
  * existir) — o catálogo de verticais (mobilidade, delivery, ...), com o
  * "treino"/prompt real de cada nicho, é mantido pelo Super Admin em
- * /admin/whatsapp (ver bot-vertical.repository.ts) e sobrepõe isto. */
-const BASE_SYSTEM_PROMPT = `Você trabalha numa central de mobilidade, atendendo pedidos de corrida pelo WhatsApp.
-Fale como uma pessoa de verdade atendendo o telefone: frases curtas, diretas, em português natural. NUNCA liste opções em tópicos ou escreva como um menu ("Posso: - Isso - Aquilo") — isso soa a bot e é exatamente o que você precisa evitar. Converse de um jeito só, uma pergunta de cada vez.
+ * /admin/whatsapp (ver bot-vertical.repository.ts) e sobrepõe isto.
+ *
+ * Estruturado em passos (identidade → classificar intenção → roteiro de
+ * corrida) em vez de um parágrafo só — confirmado em pesquisa (framework
+ * "Conversation Routines" pra diálogo orientado a tarefas) que listar os
+ * passos em ordem reduz a chance do modelo pular etapa ou ficar confuso
+ * sobre o que já foi dito. Corrida é o único fluxo resolvido sozinho por
+ * enquanto — qualquer outra intenção (motorista, entrega, abrir uma
+ * central própria) só qualifica o mínimo e escala, não tenta resolver. */
+const BASE_SYSTEM_PROMPT = `IDENTIDADE
+Você é a atendente virtual de uma central de mobilidade, atendendo pelo WhatsApp. Fale como uma pessoa de verdade atendendo o telefone: frases curtas, diretas, em português natural, uma pergunta de cada vez. NUNCA liste opções em tópicos ou escreva como um menu ("Posso: - Isso - Aquilo") — isso soa a bot e é exatamente o que você precisa evitar.
 
-Você ajuda o cliente a chamar uma corrida (pergunte de onde ele tá saindo e pra onde vai, se ainda não souber), saber como anda uma corrida que já chamou, ou cancelar uma. Se ele não disser logo o que quer, pergunta direto e simples — não explique tudo que você sabe fazer de uma vez.
+IDENTIFICANDO O QUE O CLIENTE QUER
+Antes de qualquer coisa, entenda qual desses é o pedido — se o cliente já disse, não pergunte de novo, só confirme o que ainda falta:
+- Corrida (chamar, acompanhar ou cancelar uma viagem): você resolve sozinha, siga o "ROTEIRO DE CORRIDA" abaixo.
+- Qualquer outra coisa (quer ser motorista, fazer uma entrega, abrir uma central própria, ou só quer falar com alguém): você NÃO resolve sozinha. Pergunte o nome da pessoa e, se for sobre ser motorista, a cidade e se já tem veículo próprio — nada além disso — e use "escalarParaHumano" descrevendo o que ela quer no "resumoPedido".
 
-Antes de confirmar um endereço, use a ferramenta "buscarEndereco" pra ter certeza que ele existe de verdade — sem anunciar que está "buscando", só confirme naturalmente (ex: "Beleza, Avenida Paulista, 1000 — é isso?"). Se não encontrar, peça pra detalhar ou repetir, sem assumir que está certo.
+ROTEIRO DE CORRIDA
+1. Descubra em qual cidade o cliente está, se não for óbvio pelo contexto. Confira nas "Informações desta empresa" (se houver) se essa cidade é atendida. Se não for atendida, informe isso ao cliente com educação e pare aqui — não continue pedindo endereço.
+2. Se a cidade for atendida, descubra a origem (de onde o cliente está saindo), se ainda não souber.
+3. Descubra o destino (pra onde ele vai), se ainda não souber.
+4. Antes de confirmar qualquer um dos dois endereços, use a ferramenta "buscarEndereco" pra ter certeza que existe de verdade — sem anunciar que está "buscando", só confirme naturalmente (ex: "Beleza, Avenida Paulista, 1000 — é isso?"). Se não encontrar, peça pra detalhar ou repetir, sem assumir que está certo.
+5. Com os dois endereços confirmados, resuma o pedido e peça a confirmação final do cliente antes de seguir.
+6. Confirmado, use "escalarParaHumano" com origem e destino no "resumoPedido".
 
-Se o cliente pedir pra falar com alguém de verdade, ou o pedido fugir do que você resolve, use "escalarParaHumano" em vez de tentar dar conta sozinho, descrevendo o pedido em aberto no "resumoPedido".`;
+Pra acompanhar uma corrida já chamada ou cancelar uma, use "escalarParaHumano" direto — isso não é algo que você resolve sozinha.`;
 
-/** `pendingRequestSummary` only passed in when the conversation just
- * reopened from ESCALATED (see handleInboundMessage) — the previous
- * request may genuinely still be unresolved, so the model is told to
- * check instead of either assuming it's done (old bug: silently moved on)
- * or assuming it's still open (confirmed in production: re-escalated an
- * unrelated new message because the old handoff was still in context). */
+/** `customerName` vem do `chatName` do webhook da Z-API (ver
+ * maybeHandleInboundBotMessage) — confirmado contra dados reais que
+ * `senderName` vem errado (devolve o nome da própria conta conectada, não
+ * do cliente), então só `chatName` é confiável aqui. `pendingRequestSummary`
+ * só é passado quando a conversa acabou de reabrir de ESCALATED — a
+ * solicitação anterior pode genuinamente ainda estar em aberto, então o
+ * modelo é instruído a perguntar em vez de assumir (ver
+ * handleInboundMessage e o bug confirmado em produção: reescalava uma
+ * mensagem nova só porque a escalação antiga ainda estava no contexto). */
 function buildSystemPrompt(
   verticalPrompt: string | null,
   businessProfile: string | null,
+  customerName: string | null,
   pendingRequestSummary?: string | null
 ): string {
   const base = verticalPrompt?.trim() || BASE_SYSTEM_PROMPT;
+
+  const contextLines = [
+    `Agora é hora de dizer "${currentGreetingWord()}" quando cumprimentar — não use outro período do dia.`,
+  ];
+  if (customerName) {
+    contextLines.push(
+      `O cliente se chama ${customerName} (nome do WhatsApp dele) — use isso naturalmente de vez em quando, sem repetir em toda mensagem.`
+    );
+  }
+  const withContext = `${contextLines.join(" ")}\n\n${base}`;
+
   const withProfile = businessProfile?.trim()
-    ? `${base}\n\nInformações desta empresa:\n${businessProfile.trim()}`
-    : base;
+    ? `${withContext}\n\nInformações desta empresa:\n${businessProfile.trim()}`
+    : withContext;
   if (!pendingRequestSummary) return withProfile;
   return `${withProfile}\n\nEsse cliente tinha uma solicitação em aberto, já passada pra um atendente humano: "${pendingRequestSummary}". Antes de atender o que ele disser agora, pergunte se essa solicitação já foi atendida. Se ele confirmar que sim, use a ferramenta "encerrarPedido" e siga normalmente. Se ainda não foi atendida, ou se ele trouxer um assunto totalmente novo, atenda o que ele pedir sem insistir no ponto.`;
 }
 
-export type HandleInboundMessageInput = { connectionId: string; fromPhone: string } & (
+/** Antes disso a IA só sabia dizer "bom dia"/"boa tarde"/"boa noite" se o
+ * cliente tivesse dito primeiro (ela só ecoava) — nenhum dado real de hora
+ * chegava no prompt. Fuso de Dois Vizinhos/PR é o mesmo de Brasília
+ * (America/Sao_Paulo), sem horário de verão desde 2019. */
+function currentGreetingWord(): string {
+  const hour = Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Sao_Paulo",
+      hour: "numeric",
+      hour12: false,
+    }).format(new Date())
+  );
+  if (hour < 12) return "Bom dia";
+  if (hour < 18) return "Boa tarde";
+  return "Boa noite";
+}
+
+export type HandleInboundMessageInput = { connectionId: string; fromPhone: string; customerName: string | null } & (
   | { text: string; audioUrl?: undefined }
   | { audioUrl: string; text?: undefined }
 );
@@ -295,7 +344,7 @@ async function handleReplyFailure(
  * logs/bot-attendant.log — a message that "arrives but the AI doesn't
  * reply" has no other trace to debug from otherwise. */
 export async function handleInboundMessage(input: HandleInboundMessageInput): Promise<void> {
-  const { connectionId, fromPhone } = input;
+  const { connectionId, fromPhone, customerName } = input;
   await logBotEvent("info", "inbound_received", { connectionId, fromPhone, kind: "text" in input ? "text" : "audio" });
 
   const config = await getBotConfig(connectionId);
@@ -370,6 +419,7 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
         instructions: buildSystemPrompt(
           config.vertical?.systemPrompt ?? null,
           config.businessProfile,
+          customerName,
           pendingRequestSummary
         ),
         messages,

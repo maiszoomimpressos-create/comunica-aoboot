@@ -488,6 +488,12 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
   const fromPhone = payload.phone;
   if (typeof fromPhone !== "string") return;
 
+  // `chatName`, não `senderName` — confirmado contra payloads reais que
+  // `senderName` vem com o nome da própria conta conectada (não do
+  // cliente) nessas mensagens, apesar do que a documentação da Z-API diz.
+  const customerName =
+    typeof payload.chatName === "string" && payload.chatName.trim() ? payload.chatName.trim() : null;
+
   // Z-API redelivers the same audio message's webhook a few seconds apart
   // (confirmed in production) — claim the messageId first so the second
   // delivery is a no-op instead of a second AI reply. No messageId (any
@@ -504,13 +510,13 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
 
   const text = isRecord(payload.text) ? payload.text.message : undefined;
   if (typeof text === "string" && text.trim()) {
-    await handleInboundMessage({ connectionId, fromPhone, text });
+    await handleInboundMessage({ connectionId, fromPhone, customerName, text });
     return;
   }
 
   const audioUrl = isRecord(payload.audio) ? payload.audio.audioUrl : undefined;
   if (typeof audioUrl === "string" && audioUrl) {
-    await handleInboundMessage({ connectionId, fromPhone, audioUrl });
+    await handleInboundMessage({ connectionId, fromPhone, customerName, audioUrl });
     return;
   }
 
