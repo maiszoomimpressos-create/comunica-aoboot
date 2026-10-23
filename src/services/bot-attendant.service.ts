@@ -107,7 +107,7 @@ async function transcribeAudio(audioUrl: string): Promise<string | null> {
  * punchy replies came across as rushed on a real WhatsApp voice note. */
 async function synthesizeSpeech(text: string): Promise<string | null> {
   try {
-    const { audio } = await generateSpeech({ model: "openai/tts-1", text, voice: "alloy", speed: 0.85 });
+    const { audio } = await generateSpeech({ model: "openai/tts-1", text, voice: "alloy", speed: 0.88 });
     return `data:${audio.mediaType};base64,${audio.base64}`;
   } catch {
     return null;
