@@ -99,10 +99,15 @@ async function transcribeAudio(audioUrl: string): Promise<string | null> {
  * convention as transcribeAudio; never blocks the reply. Goes through the
  * AI Gateway (OpenAI has no BYOK-vs-credits issue like Anthropic did —
  * works on the free tier, confirmed this session for other OpenAI
- * models). */
+ * models).
+ *
+ * `speed` below the 1.0 default (confirmed in Z-API's own docs: it just
+ * wants `data:audio/mpeg;base64,...`, same mp3 we already send — not a
+ * format/sample-rate mismatch) because the default read of our short,
+ * punchy replies came across as rushed on a real WhatsApp voice note. */
 async function synthesizeSpeech(text: string): Promise<string | null> {
   try {
-    const { audio } = await generateSpeech({ model: "openai/tts-1", text, voice: "alloy" });
+    const { audio } = await generateSpeech({ model: "openai/tts-1", text, voice: "alloy", speed: 0.85 });
     return `data:${audio.mediaType};base64,${audio.base64}`;
   } catch {
     return null;
