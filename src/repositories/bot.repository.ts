@@ -48,21 +48,32 @@ export function upsertBotConfig(
  * escalated hours earlier got zero reply to a brand new message. A new
  * message is read as "the customer needs help again", not "resume the old
  * request", so the bot picking it back up is the right default even if a
- * human happens to still be mid-handoff on WhatsApp itself. */
-export async function getOrCreateActiveBotConversation(connectionId: string, contactPhone: string) {
+ * human happens to still be mid-handoff on WhatsApp itself.
+ *
+ * `reopened: true` tells the caller to drop the pre-reactivation history
+ * from what's fed to the model — confirmed in practice that without this,
+ * the old "já passei pro atendente humano" turn stays in context and the
+ * model re-escalates almost immediately on the very next message, making a
+ * reopened thread look stuck all over again. */
+export async function getOrCreateActiveBotConversation(
+  connectionId: string,
+  contactPhone: string
+): Promise<Prisma.BotConversationGetPayload<object> & { reopened: boolean }> {
   const existing = await prisma.botConversation.findUnique({
     where: { connectionId_contactPhone: { connectionId, contactPhone } },
   });
   if (!existing) {
-    return prisma.botConversation.create({ data: { connectionId, contactPhone } });
+    const created = await prisma.botConversation.create({ data: { connectionId, contactPhone } });
+    return { ...created, reopened: false };
   }
   if (existing.status === "CLOSED" || existing.status === "ESCALATED") {
-    return prisma.botConversation.update({
+    const reopened = await prisma.botConversation.update({
       where: { id: existing.id },
       data: { status: "ACTIVE" },
     });
+    return { ...reopened, reopened: true };
   }
-  return existing;
+  return { ...existing, reopened: false };
 }
 
 export function setBotConversationStatus(conversationId: string, status: BotConversationStatus) {

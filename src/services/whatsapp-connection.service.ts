@@ -36,6 +36,7 @@ import {
 import { getProviderByKey } from "@/repositories/channel-provider.repository";
 import { handleInboundMessage } from "./bot-attendant.service";
 import { tryClaimInboundMessage } from "@/repositories/bot.repository";
+import { logBotEvent, serializeError } from "@/lib/logging/bot-attendant-logger";
 import {
   ConflictError,
   ForbiddenError,
@@ -495,7 +496,10 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
   const messageId = payload.messageId;
   if (typeof messageId === "string") {
     const claimed = await tryClaimInboundMessage(connectionId, messageId);
-    if (!claimed) return;
+    if (!claimed) {
+      await logBotEvent("info", "webhook_duplicate_skipped", { connectionId, fromPhone, messageId });
+      return;
+    }
   }
 
   const text = isRecord(payload.text) ? payload.text.message : undefined;
@@ -507,7 +511,14 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
   const audioUrl = isRecord(payload.audio) ? payload.audio.audioUrl : undefined;
   if (typeof audioUrl === "string" && audioUrl) {
     await handleInboundMessage({ connectionId, fromPhone, audioUrl });
+    return;
   }
+
+  await logBotEvent("info", "webhook_message_received_no_content", {
+    connectionId,
+    fromPhone,
+    messageId: typeof messageId === "string" ? messageId : null,
+  });
 }
 
 /** Called by the public webhook route after verifying the secret. Always
@@ -529,11 +540,11 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
 export async function recordWebhookEvent(connectionId: string, payload: unknown): Promise<void> {
   await createWebhookEvent(connectionId, "z-api", payload);
   await applyConnectionStatusFromWebhook(connectionId, payload).catch((err) => {
-    console.error("Failed to apply connection status from webhook:", err);
+    void logBotEvent("error", "apply_connection_status_failed", { connectionId, error: serializeError(err) });
   });
   after(() =>
     maybeHandleInboundBotMessage(connectionId, payload).catch((err) => {
-      console.error("Failed to run bot attendant on inbound message:", err);
+      void logBotEvent("error", "bot_pipeline_uncaught", { connectionId, error: serializeError(err) });
     })
   );
 }

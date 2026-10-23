@@ -11,10 +11,13 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import { decryptSecret } from "@/lib/crypto/secret-box";
 import { getWhatsappProvider } from "@/lib/whatsapp/registry";
+import type { WhatsappProvider } from "@/lib/whatsapp/provider";
+import type { WhatsappConnectionConfig } from "@/lib/whatsapp/types";
 import { getConnectionCredentialsById } from "@/repositories/channel-connection.repository";
 import { getAiAttendantSettings } from "@/repositories/ai-attendant-settings.repository";
 import { createAiUsageLog } from "@/repositories/ai-usage.repository";
 import { estimateChatCostUsd } from "@/lib/ai/gateway-pricing";
+import { logBotEvent, serializeError } from "@/lib/logging/bot-attendant-logger";
 import {
   getBotConfig,
   getOrCreateActiveBotConversation,
@@ -175,8 +178,10 @@ async function recordChatUsage(
       outputTokens: usage.outputTokens ?? null,
       costUsd,
     });
-  } catch {
-    // Não crítico pra resposta já enviada ao cliente.
+  } catch (err) {
+    // Não crítico pra resposta já enviada ao cliente — mas logado, porque
+    // antes disso falhava em silêncio total (ver logs/bot-attendant.log).
+    await logBotEvent("warn", "record_chat_usage_failed", { connectionId, model, error: serializeError(err) });
   }
 }
 
@@ -207,20 +212,61 @@ function buildTools() {
   };
 }
 
+/** Dispara quando a chamada ao modelo (ou o envio da resposta) falha — rate
+ * limit, credencial inválida, Gateway fora do ar, etc. Antes disso essas
+ * falhas não tinham NENHUM fallback: a exceção subia até o catch genérico
+ * do `after()` em whatsapp-connection.service.ts, que só fazia
+ * console.error — o cliente nunca recebia resposta nenhuma e nada ficava
+ * registrado. Agora loga com contexto completo e ainda tenta mandar um
+ * aviso pro cliente, pra "travar" virar "demorou/avisou" em vez de
+ * silêncio puro. Todo o try/catch aqui dentro é defensivo — se até o envio
+ * do fallback falhar, só loga de novo e desiste. */
+async function handleReplyFailure(
+  err: unknown,
+  ctx: { connectionId: string; fromPhone: string; conversationId: string; model: string },
+  provider: WhatsappProvider,
+  providerConfig: WhatsappConnectionConfig
+): Promise<void> {
+  await logBotEvent("error", "generate_reply_failed", { ...ctx, error: serializeError(err) });
+
+  const fallback = "Desculpe, tive um problema aqui pra responder. Pode repetir sua mensagem?";
+  try {
+    await provider.sendMessage(providerConfig, ctx.fromPhone, fallback, {
+      delayTyping: typingDelaySeconds(fallback),
+    });
+    await createBotMessage(ctx.conversationId, "OUT", fallback);
+    await touchBotConversation(ctx.conversationId);
+  } catch (sendErr) {
+    await logBotEvent("error", "generate_reply_failure_fallback_also_failed", {
+      ...ctx,
+      error: serializeError(sendErr),
+    });
+  }
+}
+
 /** Entry point called from the inbound webhook pipeline (see
  * maybeHandleInboundBotMessage in whatsapp-connection.service.ts). Never
  * throws — any failure here must not break the webhook's fast-ack
  * contract; callers already wrap this in a catch, but every exit path
  * here is itself defensive (missing config/credentials just means "don't
- * respond", not an error). */
+ * respond", not an error). Every step is logged to
+ * logs/bot-attendant.log — a message that "arrives but the AI doesn't
+ * reply" has no other trace to debug from otherwise. */
 export async function handleInboundMessage(input: HandleInboundMessageInput): Promise<void> {
   const { connectionId, fromPhone } = input;
+  await logBotEvent("info", "inbound_received", { connectionId, fromPhone, kind: "text" in input ? "text" : "audio" });
 
   const config = await getBotConfig(connectionId);
-  if (!config?.enabled) return;
+  if (!config?.enabled) {
+    await logBotEvent("info", "skipped_bot_disabled", { connectionId, fromPhone });
+    return;
+  }
 
   const credentials = await getConnectionCredentialsById(connectionId);
-  if (!credentials?.apiUrl || !credentials.apiTokenCipher) return;
+  if (!credentials?.apiUrl || !credentials.apiTokenCipher) {
+    await logBotEvent("warn", "skipped_missing_credentials", { connectionId, fromPhone });
+    return;
+  }
 
   const apiToken = decryptSecret(credentials.apiTokenCipher);
   const provider = getWhatsappProvider(credentials.provider.key);
@@ -230,10 +276,14 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
   // reopens a previously ESCALATED thread too, since a new inbound message
   // here means the customer needs help again.
   const conversation = await getOrCreateActiveBotConversation(connectionId, fromPhone);
+  if (conversation.reopened) {
+    await logBotEvent("info", "conversation_reopened", { connectionId, fromPhone, conversationId: conversation.id });
+  }
 
   const inboundWasAudio = "audioUrl" in input;
   const text = "text" in input ? input.text : await transcribeAudio(input.audioUrl);
   if (!text) {
+    await logBotEvent("warn", "transcription_failed", { connectionId, fromPhone, conversationId: conversation.id });
     const fallback = "Não consegui entender o áudio, pode escrever a mensagem?";
     await provider.sendMessage(providerConfig, fromPhone, fallback, {
       delayTyping: typingDelaySeconds(fallback),
@@ -245,21 +295,46 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
 
   await createBotMessage(conversation.id, "IN", text);
 
-  const history = await listRecentBotMessages(conversation.id, HISTORY_LIMIT);
-  const messages: ModelMessage[] = history.map((message) => ({
-    role: message.direction === "IN" ? "user" : "assistant",
-    content: message.body,
-  }));
-
   const settings = await getAiAttendantSettings();
 
-  const result = await generateText({
-    model: resolveModel(settings.model),
-    instructions: buildSystemPrompt(config.vertical?.systemPrompt ?? null, config.businessProfile),
-    messages,
-    tools: buildTools(),
-    stopWhen: isStepCount(6),
-  });
+  const generated = await (async () => {
+    try {
+      const history = await listRecentBotMessages(conversation.id, HISTORY_LIMIT);
+      // Thread reopened from CLOSED/ESCALATED: drop everything before the
+      // reactivation (conversation.updatedAt just got bumped by that status
+      // flip) so the model doesn't see the old "já passei pro atendente
+      // humano" turn and re-escalate on the spot for an unrelated new message.
+      const relevantHistory = conversation.reopened
+        ? history.filter((message) => message.createdAt >= conversation.updatedAt)
+        : history;
+      const messages: ModelMessage[] = relevantHistory.map((message) => ({
+        role: message.direction === "IN" ? "user" : "assistant",
+        content: message.body,
+      }));
+
+      const result = await generateText({
+        model: resolveModel(settings.model),
+        instructions: buildSystemPrompt(config.vertical?.systemPrompt ?? null, config.businessProfile),
+        messages,
+        tools: buildTools(),
+        stopWhen: isStepCount(6),
+      });
+      return { ok: true as const, result };
+    } catch (err) {
+      return { ok: false as const, err };
+    }
+  })();
+
+  if (!generated.ok) {
+    await handleReplyFailure(
+      generated.err,
+      { connectionId, fromPhone, conversationId: conversation.id, model: settings.model },
+      provider,
+      providerConfig
+    );
+    return;
+  }
+  const result = generated.result;
 
   await recordChatUsage(connectionId, settings.model, result.usage);
 
@@ -270,12 +345,32 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
       ? "Só um momento, vou te transferir para um atendente humano."
       : "Desculpe, não entendi. Pode repetir?");
 
-  const replyAudio = inboundWasAudio ? await synthesizeSpeech(replyText) : null;
-  const delayTyping = typingDelaySeconds(replyText);
-  if (replyAudio) {
-    await provider.sendAudio(providerConfig, fromPhone, replyAudio, { delayTyping });
-  } else {
-    await provider.sendMessage(providerConfig, fromPhone, replyText, { delayTyping });
+  await logBotEvent("info", "reply_generated", {
+    connectionId,
+    fromPhone,
+    conversationId: conversation.id,
+    escalated,
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+  });
+
+  try {
+    const replyAudio = inboundWasAudio ? await synthesizeSpeech(replyText) : null;
+    const delayTyping = typingDelaySeconds(replyText);
+    if (replyAudio) {
+      await provider.sendAudio(providerConfig, fromPhone, replyAudio, { delayTyping });
+    } else {
+      await provider.sendMessage(providerConfig, fromPhone, replyText, { delayTyping });
+    }
+  } catch (err) {
+    await logBotEvent("error", "send_reply_failed", {
+      connectionId,
+      fromPhone,
+      conversationId: conversation.id,
+      error: serializeError(err),
+    });
+    // Mesmo sem conseguir entregar, guarda a resposta — o histórico fica
+    // coerente pro próximo turno, mesmo que o cliente não tenha recebido.
   }
 
   await createBotMessage(conversation.id, "OUT", replyText);

@@ -13,6 +13,9 @@
 # testing
 /coverage
 
+# logs (see src/lib/logging/bot-attendant-logger.ts)
+/logs
+
 # next.js
 /.next/
 /.next-verify/
