@@ -443,6 +443,7 @@ model ChannelConnection {
   botConfig                BotConfig?
   botConversations         BotConversation[]
   processedWebhookMessages ProcessedWebhookMessage[]
+  aiUsageLogs              AiUsageLog[]
 
   @@index([tenantId, channelId])
   @@map("channel_connection")
@@ -738,7 +739,8 @@ model BotConfig {
   id              String   @id @default(cuid())
   enabled         Boolean  @default(false)
   // Texto livre escrito pelo tenant (nome da empresa, regras do negócio,
-  // preço mínimo, etc.) — anexado ao prompt de sistema fixo do atendente.
+  // preço mínimo, etc.) — anexado ao prompt de sistema da vertical escolhida
+  // (ou ao BASE_SYSTEM_PROMPT legado, se nenhuma vertical foi escolhida).
   businessProfile String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -746,7 +748,38 @@ model BotConfig {
   connectionId String            @unique
   connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
+  // Nicho de negócio escolhido pelo tenant (mobilidade, delivery, ...) — ver
+  // BotVertical. Nullable pra não quebrar tenants que configuraram o bot
+  // antes dessa coluna existir (cai no prompt legado de mobilidade).
+  verticalId String?
+  vertical   BotVertical? @relation(fields: [verticalId], references: [id])
+
   @@map("bot_config")
+}
+
+// Catálogo de nichos de negócio pro atendente de IA (mobilidade, delivery,
+// ...) — mesmo padrão de catálogo code-extensible usado em
+// whatsapp-notification-types.ts, mas as linhas (e principalmente o texto
+// de `systemPrompt`, o "treino" de cada nicho) ficam no banco porque são
+// editadas pelo Super Admin em /admin/whatsapp, não só por deploy.
+model BotVertical {
+  id       String  @id @default(cuid())
+  key      String  @unique
+  label    String
+  systemPrompt String
+  // Nichos com endereço de loja fixo (delivery, pizzaria, ...) vs. nichos
+  // onde origem/destino são sempre livres por conversa (mobilidade) — usado
+  // mais pra frente pra decidir se o tenant precisa cadastrar um endereço
+  // fixo de referência; não consumido ainda em bot-attendant.service.ts.
+  requiresFixedLocation Boolean @default(false)
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  botConfigs BotConfig[]
+
+  @@map("bot_vertical")
 }
 
 enum BotConversationStatus {
@@ -801,6 +834,28 @@ model AiAttendantSettings {
   updatedAt DateTime @updatedAt
 
   @@map("ai_attendant_settings")
+}
+
+// Uma linha por resposta do atendente de IA (uma chamada de generateText em
+// bot-attendant.service.ts) — tokens de entrada/saída e o custo em USD
+// estimado a partir da tabela de preços do AI Gateway (ver
+// lib/ai/gateway-pricing.ts). `costUsd` null quando o modelo configurado não
+// está no catálogo do Gateway (ex: trocado pra uma string inédita) — ainda
+// assim guarda os tokens pra não perder o dado. Consumido pelo Super Admin
+// em /admin/whatsapp pra ver gasto de IA por conexão.
+model AiUsageLog {
+  id           String   @id @default(cuid())
+  model        String
+  inputTokens  Int?
+  outputTokens Int?
+  costUsd      Float?
+  createdAt    DateTime @default(now())
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([connectionId, createdAt])
+  @@map("ai_usage_log")
 }
 
 // =====================================================================

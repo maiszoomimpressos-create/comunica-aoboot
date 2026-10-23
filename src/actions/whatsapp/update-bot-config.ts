@@ -8,6 +8,7 @@ const schema = z.object({
   connectionId: z.string().min(1),
   enabled: z.boolean(),
   businessProfile: z.string().nullable(),
+  verticalId: z.string().nullable(),
 });
 
 export const updateBotConfigAction = defineTenantAction(
@@ -17,6 +18,7 @@ export const updateBotConfigAction = defineTenantAction(
     await upsertBotConfig(parsed.connectionId, {
       enabled: parsed.enabled,
       businessProfile: parsed.businessProfile,
+      verticalId: parsed.verticalId,
     });
     return { ok: true };
   }

@@ -2,7 +2,10 @@ import { prisma } from "@/lib/db/prisma";
 import { Prisma, type BotConversationStatus, type BotMessageDirection } from "@/generated/prisma/client";
 
 export function getBotConfig(connectionId: string) {
-  return prisma.botConfig.findUnique({ where: { connectionId } });
+  return prisma.botConfig.findUnique({
+    where: { connectionId },
+    include: { vertical: { select: { systemPrompt: true } } },
+  });
 }
 
 /** Atomic idempotency claim: `true` the first time this (connection,
@@ -28,7 +31,7 @@ export async function tryClaimInboundMessage(
  * update-bot-config action). One row per connection, created on first save. */
 export function upsertBotConfig(
   connectionId: string,
-  data: { enabled: boolean; businessProfile: string | null }
+  data: { enabled: boolean; businessProfile: string | null; verticalId: string | null }
 ) {
   return prisma.botConfig.upsert({
     where: { connectionId },

@@ -118,6 +118,57 @@ async function seedChannelProviders() {
   console.log(`Channel providers: ${CHANNEL_PROVIDERS.length} seeded.`);
 }
 
+const BOT_VERTICALS = [
+  {
+    key: "mobilidade",
+    label: "Mobilidade (central de corridas)",
+    requiresFixedLocation: false,
+    sortOrder: 0,
+    systemPrompt: `Você trabalha numa central de mobilidade, atendendo pedidos de corrida pelo WhatsApp.
+Fale como uma pessoa de verdade atendendo o telefone: frases curtas, diretas, em português natural. NUNCA liste opções em tópicos ou escreva como um menu ("Posso: - Isso - Aquilo") — isso soa a bot e é exatamente o que você precisa evitar. Converse de um jeito só, uma pergunta de cada vez.
+
+Você ajuda o cliente a chamar uma corrida (pergunte de onde ele tá saindo e pra onde vai, se ainda não souber), saber como anda uma corrida que já chamou, ou cancelar uma. Se ele não disser logo o que quer, pergunta direto e simples — não explique tudo que você sabe fazer de uma vez.
+
+Antes de confirmar um endereço, use a ferramenta "buscarEndereco" pra ter certeza que ele existe de verdade — sem anunciar que está "buscando", só confirme naturalmente (ex: "Beleza, Avenida Paulista, 1000 — é isso?"). Se não encontrar, peça pra detalhar ou repetir, sem assumir que está certo.
+
+Se o cliente pedir pra falar com alguém de verdade, ou o pedido fugir do que você resolve, use "escalarParaHumano" em vez de tentar dar conta sozinho.`,
+  },
+  {
+    key: "delivery",
+    label: "Delivery (lanchonete, pizzaria, loja)",
+    requiresFixedLocation: true,
+    sortOrder: 1,
+    systemPrompt: `Você trabalha num negócio de delivery, atendendo pedidos pelo WhatsApp.
+Fale como uma pessoa de verdade atendendo o telefone: frases curtas, diretas, em português natural. NUNCA liste opções em tópicos ou escreva como um menu ("Posso: - Isso - Aquilo") — isso soa a bot e é exatamente o que você precisa evitar. Converse de um jeito só, uma pergunta de cada vez.
+
+Você ajuda o cliente a montar o pedido, confirmar o endereço de entrega e saber como anda um pedido já feito. Se ele não disser logo o que quer, pergunta direto e simples — não explique tudo que você sabe fazer de uma vez.
+
+Antes de confirmar o endereço de entrega, use a ferramenta "buscarEndereco" pra ter certeza que ele existe de verdade — sem anunciar que está "buscando", só confirme naturalmente. Se não encontrar, peça pra detalhar ou repetir, sem assumir que está certo.
+
+Se o cliente pedir pra falar com alguém de verdade, ou o pedido fugir do que você resolve, use "escalarParaHumano" em vez de tentar dar conta sozinho.`,
+  },
+] as const;
+
+/** Upsert por `key` — na atualização só realinha label/ordem/flag; nunca
+ * sobrescreve `systemPrompt`, porque esse campo é o "treino" editado ao
+ * vivo pelo Super Admin em /admin/whatsapp (ver bot-verticals-manager.tsx)
+ * e precisa sobreviver a um re-seed, mesmo padrão do `isActive` em
+ * seedChannelProviders. */
+async function seedBotVerticals() {
+  for (const vertical of BOT_VERTICALS) {
+    await prisma.botVertical.upsert({
+      where: { key: vertical.key },
+      create: vertical,
+      update: {
+        label: vertical.label,
+        requiresFixedLocation: vertical.requiresFixedLocation,
+        sortOrder: vertical.sortOrder,
+      },
+    });
+  }
+  console.log(`Bot verticals: ${BOT_VERTICALS.length} seeded.`);
+}
+
 async function seedPlatformAdmin() {
   const email = process.env.ADMIN_EMAIL;
   const password = process.env.ADMIN_PASSWORD;
@@ -143,6 +194,7 @@ async function main() {
   await seedPlans();
   await seedModules();
   await seedChannelProviders();
+  await seedBotVerticals();
   await seedPlatformAdmin();
 }
 

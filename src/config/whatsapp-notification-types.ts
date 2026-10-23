@@ -216,6 +216,30 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     },
   },
   {
+    key: "corrida_concluida",
+    label: "Corrida concluída (resumo pro passageiro)",
+    requiresQr: false,
+    // Disparado pelo app de corridas (MAI Drive) ao finalizar a viagem —
+    // mesmo número do passageiro já capturado no início da corrida.
+    // `distancia` e `valor_total` sempre vêm preenchidos; `duracao` é
+    // opcional (mesmo tratamento de opcional que formatLocation/
+    // formatEventDateTime) e some da mensagem quando vier "".
+    requiredDetailKeys: ["distancia", "valor_total"],
+    serviceKey: "purchase_confirmation",
+    buildMessage: ({ whatsappName, businessName, details }) => {
+      const lines = [
+        greet(whatsappName),
+        "",
+        `Sua corrida foi concluída. Obrigado por escolher a ${bold(businessName)}!`,
+        "",
+        `📍 Distância: ${details.distancia}`,
+      ];
+      if (details.duracao?.trim()) lines.push(`⏱️ Duração: ${details.duracao}`);
+      lines.push(`💰 Valor total: ${bold(details.valor_total)}`);
+      return lines.join("\n");
+    },
+  },
+  {
     key: "codigo_verificacao",
     label: "Código de verificação (2FA)",
     // Segundo fator de acesso a um painel/menu administrativo (ex: terminal

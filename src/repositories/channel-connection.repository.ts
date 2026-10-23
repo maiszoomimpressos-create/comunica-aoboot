@@ -24,7 +24,7 @@ export interface ChannelConnectionSummary {
   enabledServices: string[];
   // Config do atendente de IA (ver bot-attendant.service.ts) — null quando
   // o tenant nunca salvou nada ainda (equivale a desativado).
-  botConfig: { enabled: boolean; businessProfile: string | null } | null;
+  botConfig: { enabled: boolean; businessProfile: string | null; verticalId: string | null } | null;
 }
 
 const summarySelect = {
@@ -42,7 +42,7 @@ const summarySelect = {
   apiKeyLastUsedAt: true,
   balanceAlertPhones: true,
   enabledServices: true,
-  botConfig: { select: { enabled: true, businessProfile: true } },
+  botConfig: { select: { enabled: true, businessProfile: true, verticalId: true } },
 } as const;
 
 /** Get-or-create the tenant's channel row for a given type (WHATSAPP, ...). */

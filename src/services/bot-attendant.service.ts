@@ -1,10 +1,20 @@
-import { generateSpeech, generateText, isStepCount, tool, transcribe, type ModelMessage } from "ai";
+import {
+  generateSpeech,
+  generateText,
+  isStepCount,
+  tool,
+  transcribe,
+  type LanguageModelUsage,
+  type ModelMessage,
+} from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import { decryptSecret } from "@/lib/crypto/secret-box";
 import { getWhatsappProvider } from "@/lib/whatsapp/registry";
 import { getConnectionCredentialsById } from "@/repositories/channel-connection.repository";
 import { getAiAttendantSettings } from "@/repositories/ai-attendant-settings.repository";
+import { createAiUsageLog } from "@/repositories/ai-usage.repository";
+import { estimateChatCostUsd } from "@/lib/ai/gateway-pricing";
 import {
   getBotConfig,
   getOrCreateActiveBotConversation,
@@ -19,10 +29,11 @@ import {
 // depois destino, etc.) sem deixar o prompt crescer sem limite.
 const HISTORY_LIMIT = 20;
 
-/** Instrução fixa do primeiro vertical validado (central de mobilidade) —
- * o `businessProfile` escrito pelo tenant é anexado em seguida. Pensado
- * pra virar configurável por vertical mais pra frente (ver memória
- * whatsapp-ai-attendant-bot-plan), não hardcoded pra sempre. */
+/** Fallback usado só quando o `BotConfig` do tenant não tem nenhuma
+ * `BotVertical` escolhida ainda (ex: configurado antes dessa coluna
+ * existir) — o catálogo de verticais (mobilidade, delivery, ...), com o
+ * "treino"/prompt real de cada nicho, é mantido pelo Super Admin em
+ * /admin/whatsapp (ver bot-vertical.repository.ts) e sobrepõe isto. */
 const BASE_SYSTEM_PROMPT = `Você trabalha numa central de mobilidade, atendendo pedidos de corrida pelo WhatsApp.
 Fale como uma pessoa de verdade atendendo o telefone: frases curtas, diretas, em português natural. NUNCA liste opções em tópicos ou escreva como um menu ("Posso: - Isso - Aquilo") — isso soa a bot e é exatamente o que você precisa evitar. Converse de um jeito só, uma pergunta de cada vez.
 
@@ -32,9 +43,10 @@ Antes de confirmar um endereço, use a ferramenta "buscarEndereco" pra ter certe
 
 Se o cliente pedir pra falar com alguém de verdade, ou o pedido fugir do que você resolve, use "escalarParaHumano" em vez de tentar dar conta sozinho.`;
 
-function buildSystemPrompt(businessProfile: string | null): string {
-  if (!businessProfile?.trim()) return BASE_SYSTEM_PROMPT;
-  return `${BASE_SYSTEM_PROMPT}\n\nInformações desta empresa:\n${businessProfile.trim()}`;
+function buildSystemPrompt(verticalPrompt: string | null, businessProfile: string | null): string {
+  const base = verticalPrompt?.trim() || BASE_SYSTEM_PROMPT;
+  if (!businessProfile?.trim()) return base;
+  return `${base}\n\nInformações desta empresa:\n${businessProfile.trim()}`;
 }
 
 export type HandleInboundMessageInput = { connectionId: string; fromPhone: string } & (
@@ -134,6 +146,30 @@ function resolveModel(modelString: string) {
   return anthropic(anthropicModelId);
 }
 
+/** Never throws — feeds the Super Admin's "gasto de IA por conexão" screen
+ * (/admin/whatsapp), but a failure here must not break the reply that
+ * already went out to the customer. `model` is the Super Admin-configured
+ * Gateway string (not the resolved Anthropic SDK model from resolveModel),
+ * since that's what gateway-pricing.ts looks up prices by. */
+async function recordChatUsage(
+  connectionId: string,
+  model: string,
+  usage: LanguageModelUsage
+): Promise<void> {
+  try {
+    const costUsd = await estimateChatCostUsd(model, usage.inputTokens, usage.outputTokens);
+    await createAiUsageLog({
+      connectionId,
+      model,
+      inputTokens: usage.inputTokens ?? null,
+      outputTokens: usage.outputTokens ?? null,
+      costUsd,
+    });
+  } catch {
+    // Não crítico pra resposta já enviada ao cliente.
+  }
+}
+
 function buildTools() {
   const tools = {
     escalarParaHumano: tool({
@@ -205,11 +241,13 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
 
   const result = await generateText({
     model: resolveModel(settings.model),
-    instructions: buildSystemPrompt(config.businessProfile),
+    instructions: buildSystemPrompt(config.vertical?.systemPrompt ?? null, config.businessProfile),
     messages,
     tools: buildTools(),
     stopWhen: isStepCount(6),
   });
+
+  await recordChatUsage(connectionId, settings.model, result.usage);
 
   const escalated = result.toolCalls.some((call) => call.toolName === "escalarParaHumano");
   const replyText =

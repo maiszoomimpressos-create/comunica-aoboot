@@ -3,6 +3,7 @@ import Link from "next/link";
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
 import { listConnectionsForTenant } from "@/repositories/channel-connection.repository";
+import { listActiveBotVerticals } from "@/repositories/bot-vertical.repository";
 import { WhatsappWelcome } from "@/components/dashboard/whatsapp/whatsapp-welcome";
 import { ConnectionCard } from "@/components/dashboard/whatsapp/connection-card";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,10 @@ export default async function WhatsappModulePage({
   const ctx = await getRequestContext(tenantSlug);
   requirePermission(ctx, "whatsapp.view");
 
-  const connections = await listConnectionsForTenant(ctx.tenantId, "WHATSAPP");
+  const [connections, botVerticals] = await Promise.all([
+    listConnectionsForTenant(ctx.tenantId, "WHATSAPP"),
+    listActiveBotVerticals(),
+  ]);
   const canManage = ctx.permissions.includes("whatsapp.manage");
 
   if (connections.length === 0) {
@@ -49,6 +53,7 @@ export default async function WhatsappModulePage({
             tenantSlug={tenantSlug}
             connection={connection}
             canManage={canManage}
+            botVerticals={botVerticals}
           />
         ))}
       </div>

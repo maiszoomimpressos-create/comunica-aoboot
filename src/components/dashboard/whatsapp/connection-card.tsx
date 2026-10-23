@@ -41,10 +41,12 @@ export function ConnectionCard({
   tenantSlug,
   connection,
   canManage,
+  botVerticals,
 }: {
   tenantSlug: string;
   connection: ChannelConnectionSummary;
   canManage: boolean;
+  botVerticals: { id: string; key: string; label: string }[];
 }) {
   const router = useRouter();
   const [showSend, setShowSend] = useState(false);
@@ -229,6 +231,8 @@ export function ConnectionCard({
               connectionId={connection.id}
               defaultEnabled={connection.botConfig?.enabled ?? false}
               defaultBusinessProfile={connection.botConfig?.businessProfile ?? null}
+              defaultVerticalId={connection.botConfig?.verticalId ?? null}
+              verticals={botVerticals}
             />
           )}
         </>

@@ -1,15 +1,20 @@
 import type { Metadata } from "next";
 import { listAllConnectionsForAdmin } from "@/repositories/channel-connection.repository";
 import { getAiAttendantSettings } from "@/repositories/ai-attendant-settings.repository";
+import { listAllBotVerticals } from "@/repositories/bot-vertical.repository";
+import { listAiUsageTotalsByConnection } from "@/repositories/ai-usage.repository";
 import { WhatsappConnectionManager } from "@/components/admin/whatsapp/whatsapp-connection-manager";
 import { AiAttendantModelForm } from "@/components/admin/whatsapp/ai-attendant-model-form";
+import { BotVerticalsManager } from "@/components/admin/whatsapp/bot-verticals-manager";
 
 export const metadata: Metadata = { title: "WhatsApp · Admin" };
 
 export default async function AdminWhatsappPage() {
-  const [connections, aiAttendantSettings] = await Promise.all([
+  const [connections, aiAttendantSettings, botVerticals, aiUsageTotals] = await Promise.all([
     listAllConnectionsForAdmin(),
     getAiAttendantSettings(),
+    listAllBotVerticals(),
+    listAiUsageTotalsByConnection(),
   ]);
 
   return (
@@ -20,8 +25,12 @@ export default async function AdminWhatsappPage() {
           Solicitações de todas as empresas. Configure as credenciais da Z-API pra ativar cada uma.
         </p>
       </div>
-      <WhatsappConnectionManager connections={connections} />
+      <WhatsappConnectionManager
+        connections={connections}
+        aiUsageTotals={Object.fromEntries(aiUsageTotals)}
+      />
       <AiAttendantModelForm currentModel={aiAttendantSettings.model} />
+      <BotVerticalsManager verticals={botVerticals} />
     </div>
   );
 }
