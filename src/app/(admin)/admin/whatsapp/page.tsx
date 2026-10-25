@@ -3,19 +3,23 @@ import { listAllConnectionsForAdmin } from "@/repositories/channel-connection.re
 import { getAiAttendantSettings } from "@/repositories/ai-attendant-settings.repository";
 import { listAllBotVerticals } from "@/repositories/bot-vertical.repository";
 import { listAiUsageTotalsByConnection } from "@/repositories/ai-usage.repository";
+import { listBusinessIntegrationsForAdmin } from "@/repositories/business-integration.repository";
 import { WhatsappConnectionManager } from "@/components/admin/whatsapp/whatsapp-connection-manager";
 import { AiAttendantModelForm } from "@/components/admin/whatsapp/ai-attendant-model-form";
 import { BotVerticalsManager } from "@/components/admin/whatsapp/bot-verticals-manager";
+import { BusinessIntegrationsManager } from "@/components/admin/whatsapp/business-integrations-manager";
 
 export const metadata: Metadata = { title: "WhatsApp · Admin" };
 
 export default async function AdminWhatsappPage() {
-  const [connections, aiAttendantSettings, botVerticals, aiUsageTotals] = await Promise.all([
-    listAllConnectionsForAdmin(),
-    getAiAttendantSettings(),
-    listAllBotVerticals(),
-    listAiUsageTotalsByConnection(),
-  ]);
+  const [connections, aiAttendantSettings, botVerticals, aiUsageTotals, businessIntegrations] =
+    await Promise.all([
+      listAllConnectionsForAdmin(),
+      getAiAttendantSettings(),
+      listAllBotVerticals(),
+      listAiUsageTotalsByConnection(),
+      listBusinessIntegrationsForAdmin(),
+    ]);
 
   return (
     <div className="space-y-6">
@@ -31,6 +35,7 @@ export default async function AdminWhatsappPage() {
       />
       <AiAttendantModelForm currentModel={aiAttendantSettings.model} />
       <BotVerticalsManager verticals={botVerticals} />
+      <BusinessIntegrationsManager integrations={businessIntegrations} />
     </div>
   );
 }

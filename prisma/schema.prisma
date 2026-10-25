@@ -444,6 +444,7 @@ model ChannelConnection {
   botConversations         BotConversation[]
   processedWebhookMessages ProcessedWebhookMessage[]
   aiUsageLogs              AiUsageLog[]
+  businessIntegration      BusinessIntegration?
 
   @@index([tenantId, channelId])
   @@map("channel_connection")
@@ -874,6 +875,37 @@ model AiUsageLog {
 
   @@index([connectionId, createdAt])
   @@map("ai_usage_log")
+}
+
+// Conexão com a API de dados de um app de negócio externo (hoje: MAI
+// Drive) que alimenta o atendente de IA — ver docs/INTEGRACAO-MAIDRIVE.md.
+// Divisão deliberada: MAIS ZAP nunca duplica/adivinha dado operacional
+// (cidade atendida, cotação, disponibilidade, status de corrida); sempre
+// consulta esse app via API. `provider` é code-extensible (igual
+// ChannelProvider) pra quando existir um segundo app de negócio além do
+// MAI Drive. Uma linha por `ChannelConnection` — "chave por central".
+model BusinessIntegration {
+  id        String   @id @default(cuid())
+  provider  String // "mai-drive" hoje; outro valor quando existir um segundo app
+  baseUrl   String // ex: "https://maidrive.app/api/whatsapp/v1"
+  enabled   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Chave de API (header x-api-key) pra chamar o app de negócio —
+  // criptografada do mesmo jeito que ChannelConnection.apiTokenCipher (ver
+  // lib/crypto/secret-box.ts), nunca em texto puro.
+  apiKeyCipher String
+
+  // Catálogo de serviços (GET /catalogo) cacheado — evita bater no app de
+  // negócio a cada mensagem. `catalogFetchedAt` null = nunca buscado ainda.
+  catalogJson      Json?
+  catalogFetchedAt DateTime?
+
+  connectionId String            @unique
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@map("business_integration")
 }
 
 // =====================================================================
