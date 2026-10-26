@@ -684,7 +684,10 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
   });
 
   try {
-    const replyAudio = inboundWasAudio ? await synthesizeSpeech(replyText) : null;
+    // Um link narrado em voz não dá pra clicar — se a resposta carrega uma
+    // URL (ex: o link do app, ver buscarLinkApp), manda como texto mesmo
+    // que a entrada tenha sido áudio.
+    const replyAudio = inboundWasAudio && !/https?:\/\//.test(replyText) ? await synthesizeSpeech(replyText) : null;
     const delayTyping = typingDelaySeconds(replyText);
     if (replyAudio) {
       await provider.sendAudio(providerConfig, fromPhone, replyAudio, { delayTyping });
