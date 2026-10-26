@@ -71,7 +71,7 @@ Existem três assuntos possíveis. Identifique qual é antes de agir — se o cl
 
 1. CORRIDA (chamar uma agora ou agendada, saber status, cancelar, ou só saber se atende numa cidade/quanto custa): siga o "ROTEIRO DE CORRIDA" abaixo.
 2. ÁREA DE ATENDIMENTO (só quer saber se atende numa cidade ou região, sem pedir corrida): use "consultar_disponibilidade" (cidade específica) ou "listar_cidades" (pergunta genérica, sem citar cidade). Na resposta diga só "sim, atendemos aqui" ou "não atendemos" — NUNCA a quantidade de motoristas, categorias ou qualquer outro dado técnico dessa ferramenta, isso não foi perguntado. Se "listar_cidades" trouxer várias cidades do mesmo estado, agrupe por estado e diga o nome completo do estado (nunca a sigla) uma única vez no final de cada grupo — ex.: "Coronel Vivida, Cruzeiro do Iguaçu, Dois Vizinhos, Francisco Beltrão, Itapejara d'Oeste, Pato Branco, São Jorge d'Oeste e Verê no Paraná; e Juiz de Fora em Minas Gerais" (sem vírgula antes do nome do estado, pra não soar com uma pausa estranha ali) — nunca repita o nome do estado ou a sigla depois de cada cidade individualmente. Depois, pergunte "em que posso te ajudar?".
-3. CADASTRO (quer ser motorista, ou quer abrir uma central própria): pergunte nome e, se ele disser, cidade e veículo próprio (motorista) ou cidade (central) — depois use "quero_ser_motorista" ou "quero_abrir_central".
+3. CADASTRO (quer ser motorista, ou quer abrir uma central própria): pergunte nome e, se ele disser, cidade e veículo próprio (motorista) ou cidade (central) — depois use "quero_ser_motorista" ou "quero_abrir_central". Se for motorista, depois de registrar o interesse pergunte se ele quer o link pra já baixar o app e se cadastrar por lá; se topar, use "buscarLinkApp" com tipo "motorista" e mande exatamente o link que vier (nunca invente ou reaproveite um link de antes da conversa — ele muda a cada versão do app).
 
 Qualquer outra coisa, ou se alguma ferramenta acima não existir nesta conversa (integração não configurada): use "escalarParaHumano" descrevendo o que o cliente quer no "resumoPedido".
 
@@ -84,6 +84,7 @@ ROTEIRO DE CORRIDA
 6. Se o cliente perguntar o preço antes de confirmar, use "cotar_corrida" com os dois endereços — a "categoria" é o nome que veio de "consultar_disponibilidade" (campo "nome" de cada item em "categorias"), nunca um valor inventado.
 7. Com tudo confirmado (origem, destino, e se é agora ou agendado), resuma o pedido (e o valor, se já tiver cotado) e peça a confirmação final do cliente antes de seguir.
 8. Confirmado, use "escalarParaHumano" com origem, destino e horário desejado (se agendado) no "resumoPedido" — pedir a corrida de verdade ainda não é automático, precisa de um atendente despachando.
+9. Em algum momento natural da conversa (nunca como primeira resposta, e nunca repetindo se o cliente já disse que não quer), pode mencionar que também existe o app do passageiro, com acompanhamento do motorista no mapa — deixe claro que é opcional e que a corrida pode continuar sendo pedida ali mesmo pelo WhatsApp. Se o cliente topar, use "buscarLinkApp" com tipo "passageiro" e mande exatamente o link que vier (nunca invente ou reaproveite um link de antes da conversa).
 
 Pra acompanhar uma corrida já chamada, use "status_corrida" (precisa do código da corrida; se o cliente não souber, use "escalarParaHumano"). Pra cancelar uma corrida já chamada, use "cancelar_corrida" (mesmo código da corrida).`;
 
@@ -241,6 +242,25 @@ async function synthesizeSpeech(text: string): Promise<string | null> {
       providerOptions: { microsoft: { style: "chat", speed: 0.92 } },
     });
     return `data:${audio.mediaType};base64,${audio.base64}`;
+  } catch {
+    return null;
+  }
+}
+
+/** O link do APK leva um `?v=<timestamp>` que muda a cada nova versão
+ * publicada — guardar um link fixo no prompt ficaria desatualizado na
+ * primeira atualização do app. Busca direto no HTML da home da MAI Drive
+ * (confirmado: `https://apk.maidrive.com.br/{motorista,passageiro}.apk?v=...`)
+ * em vez de bater numa API dedicada, porque não existe uma — é só um link
+ * na própria landing page. `null` em qualquer falha (site fora do ar, link
+ * não encontrado no HTML), pro modelo cair de volta pra oferecer o
+ * registro de interesse normal em vez de travar a conversa. */
+async function fetchAppDownloadLink(tipo: "motorista" | "passageiro"): Promise<string | null> {
+  try {
+    const response = await fetch("https://maidrive.com.br");
+    const html = await response.text();
+    const match = html.match(new RegExp(`https://apk\\.maidrive\\.com\\.br/${tipo}\\.apk\\?v=\\d+`));
+    return match?.[0] ?? null;
   } catch {
     return null;
   }
@@ -469,6 +489,19 @@ async function buildTools(connectionId: string, fromPhone: string) {
         'Encerra a solicitação em aberto que já tinha sido passada pra um atendente humano. Use só depois que o cliente confirmar explicitamente que ela já foi atendida/resolvida.',
       inputSchema: z.object({}),
       execute: async () => ({ ok: true }),
+    }),
+    buscarLinkApp: tool({
+      description:
+        'Busca o link de download mais atual do app (motorista ou passageiro) direto no site da MAI Drive — o link muda a cada versão publicada, nunca invente ou reutilize um link de antes da conversa. Use só depois que o cliente topar receber o link.',
+      inputSchema: z.object({
+        tipo: z
+          .enum(["motorista", "passageiro"])
+          .describe('"motorista" pra quem quer dirigir, "passageiro" pra quem quer pedir corrida pelo app.'),
+      }),
+      execute: async ({ tipo }) => {
+        const link = await fetchAppDownloadLink(tipo);
+        return link ? { encontrado: true, link } : { encontrado: false };
+      },
     }),
   };
 
