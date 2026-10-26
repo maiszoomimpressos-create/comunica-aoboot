@@ -11,21 +11,28 @@ Isso é a mesma regra já registrada em memória do projeto ("MAIS ZAP é o cana
 
 ## Contrato da API (MAI Drive expõe, MAIS ZAP consome)
 
-- Base: `/api/whatsapp/v1`
-- Auth: header `x-api-key`, uma chave por central (por `ChannelConnection`)
+**Confirmado contra código real do lado MAI Drive em 25/10/2026** (ver
+`docs/BRIEFING-INTEGRACAO-MAIDRIVE.md` pro histórico e os pontos ainda
+`[a confirmar]`):
+
+- Base: `https://maidrive.com.br/api/whatsapp/v1`
+- Auth: header `x-api-key`, uma chave por central (por `ChannelConnection`), formato `mdz_...`. A chave só é mostrada uma vez na hora de gerar (`/admin/whatsapp-api` do lado MAI Drive) — nunca enviar por chat/e-mail/documento.
+- **Envelope de toda resposta**: sucesso `{ "ok": true, "data": ... }`, erro `{ "ok": false, "erro": { "codigo", "mensagem" } }` — `mai-drive-client.ts` já valida isso.
 - Versionada — mudanças incompatíveis sobem a versão, não quebram `v1` em produção
 
 ### Endpoints (fase 1)
 
 | Método | Rota | Função |
 |---|---|---|
-| GET | `/catalogo` | Lista as funções disponíveis (nome, descrição, parâmetros) — a IA do MAIS ZAP descobre os serviços sozinha a partir daqui, em vez de tudo fixo no código |
-| GET | `/cidades/{cidade}/disponibilidade` | Centrais atuando, motoristas online, categorias de carro disponíveis naquela cidade |
-| POST | `/cotacao` | `{ origem, destino, categoria }` → `{ valor, distancia, tempo }` |
+| GET | `/catalogo` | Lista as funções disponíveis (`data.funcoes[]` ou `data.functions[]` — MAI Drive ainda não fechou qual fica oficial, nosso cliente aceita os dois). Cada função tem `nome`, `descricao`, `method`, `path`, `parametros` (JSON Schema), `versao`, `ativo`. Só `ativo: true` é usável agora. |
+| GET | `/cidades/{cidade}/disponibilidade?uf=` | `atendida`, `centrais[]`, `motoristasOnline`, `motoristasLivres`, `categorias[]` (com `id`/`nome`). Sempre HTTP 200, mesmo quando não atendida. |
+| POST | `/cotacao` | `{ origem, destino, categoria, cidade }` → `{ valor, moeda, distanciaKm, tempoMin, adicional, origem, destino, estimativa: true }`. `origem`/`destino` aceitam texto, `{lat,lng}` ou `"lat,lng"`. Valor é só estimativa — "cotação assinada" (valor não pode mudar) é fase 2. |
 
-### Fase 2 (ainda não especificada em detalhe)
+Códigos de erro confirmados: `401 NAO_AUTENTICADO/CHAVE_INVALIDA`, `403 NAO_DISPONIVEL`, `400 PARAMETRO_INVALIDO`, `404 NAO_ENCONTRADO/SEM_TARIFA`, `422 ENDERECO_NAO_ENCONTRADO`, `502 ROTA_INDISPONIVEL`, `501 NAO_DISPONIVEL` (função `ativo:false`), `405 METODO_NAO_PERMITIDO`, `429 LIMITE_EXCEDIDO` (com `Retry-After`) `[a confirmar se publicado]`, `500 ERRO_INTERNO`.
 
-Pedir corrida, agendar, status, cancelar, "quero ser motorista", "quero abrir uma central" — mesma lógica de descoberta via `/catalogo`, parâmetros exatos a definir quando chegar a vez de cada um.
+### Fase 2 (proposta do MAI Drive, ainda não fechada)
+
+`pedir_corrida` (`POST /corridas`), `agendar_corrida` (`POST /corridas/agendar`), `status_corrida` (`GET /corridas/{id}?telefone=`, já existe), `cancelar_corrida` (`POST /corridas/{id}/cancelar`, já existe), `quero_ser_motorista` (`POST /cadastro/motorista`, já existe, grava em `whatsapp_leads`), `quero_abrir_central` (`POST /cadastro/central`, já existe, grava em `whatsapp_leads`). As duas de corrida (pedir/agendar) ainda estão `ativo: false` (501) — faltam rota, RPC de despacho e cadastro do passageiro pelo telefone do lado MAI Drive. Ver tabela completa em `docs/BRIEFING-INTEGRACAO-MAIDRIVE.md`.
 
 ## Guardrails do lado MAIS ZAP (decisão técnica, não especificada pelo contrato original)
 
@@ -44,5 +51,6 @@ Pedir corrida, agendar, status, cancelar, "quero ser motorista", "quero abrir um
 - [x] Migration gerada, **não aplicada** (continua só local até o Neomar liberar)
 - [x] Repositório (CRUD local) — `business-integration.repository.ts`, inclui listagem pro painel e upsert com chave de API opcional (editar sem precisar reenviar a chave atual)
 - [x] UI editável no painel (Super Admin) pra configurar provider/base URL/chave por central — `/admin/whatsapp`, `BusinessIntegrationsManager`
-- [ ] `buildTools` dinâmico lendo `/catalogo` com cache + validação + fallback — cliente (`mai-drive-client.ts`) já existe, ainda não plugado em `bot-attendant.service.ts`
-- [ ] Qualquer teste real depende do endpoint `/catalogo` existir de verdade do lado do MAI Drive — até lá, o cliente HTTP fica escrito mas não comprovadamente funcional contra um servidor real.
+- [x] Cliente HTTP (`mai-drive-client.ts`) ajustado pro contrato real confirmado em 25/10 — envelope `{ok,data}`/`{ok,erro}`, campos `funcoes`/`nome`/`descricao`/`parametros`/`ativo`, filtra só funções `ativo: true`, loga `erro.codigo` quando a API responde `ok: false`.
+- [ ] `buildTools` dinâmico lendo `/catalogo` e virando ferramentas de IA de verdade — ainda não plugado em `bot-attendant.service.ts` (próximo passo depois que houver uma chave de teste real pra validar contra)
+- [ ] Teste real — depende de uma chave de teste gerada pelo Neomar em `/admin/whatsapp-api` e confirmação dos pontos `[a confirmar]` da seção 2.5 do briefing (formato do catálogo, endereço texto×lat/lng, uf, categoria por id).

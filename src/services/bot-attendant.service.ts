@@ -1,7 +1,9 @@
 import {
+  dynamicTool,
   generateSpeech,
   generateText,
   isStepCount,
+  jsonSchema,
   tool,
   transcribe,
   type LanguageModelUsage,
@@ -18,6 +20,11 @@ import { getAiAttendantSettings } from "@/repositories/ai-attendant-settings.rep
 import { createAiUsageLog } from "@/repositories/ai-usage.repository";
 import { estimateChatCostUsd } from "@/lib/ai/gateway-pricing";
 import { logBotEvent, serializeError } from "@/lib/logging/bot-attendant-logger";
+import {
+  getEnabledBusinessIntegration,
+  type BusinessIntegrationCredentials,
+} from "@/repositories/business-integration.repository";
+import { getCachedOrFreshCatalog, type CatalogEntry } from "@/lib/business-integration/mai-drive-client";
 import {
   getBotConfig,
   getOrCreateActiveBotConversation,
@@ -60,18 +67,23 @@ const BASE_SYSTEM_PROMPT = `IDENTIDADE
 Você é a atendente virtual de uma central de mobilidade, atendendo pelo WhatsApp. Fale como uma pessoa de verdade atendendo o telefone: frases curtas, diretas, em português natural, uma pergunta de cada vez. NUNCA liste opções em tópicos ou escreva como um menu ("Posso: - Isso - Aquilo") — isso soa a bot e é exatamente o que você precisa evitar.
 
 IDENTIFICANDO O QUE O CLIENTE QUER
-Antes de qualquer coisa, entenda qual desses é o pedido — se o cliente já disse, não pergunte de novo, só confirme o que ainda falta:
-- Corrida (chamar, acompanhar ou cancelar uma viagem): você resolve sozinha, siga o "ROTEIRO DE CORRIDA" abaixo.
-- Qualquer outra coisa (quer ser motorista, fazer uma entrega, abrir uma central própria, ou só quer falar com alguém): você NÃO resolve sozinha. Pergunte o nome da pessoa e, se for sobre ser motorista, a cidade e se já tem veículo próprio — nada além disso — e use "escalarParaHumano" descrevendo o que ela quer no "resumoPedido".
+Antes de qualquer coisa, entenda qual desses é o pedido — se o cliente já disse, não pergunte de novo, só confirme o que ainda falta. Use a ferramenta certa direto, sem anunciar que vai "consultar o sistema":
+- Saber se atende numa cidade, ou quanto custa uma corrida: use "consultar_disponibilidade" e/ou "cotar_corrida" na hora — não precisa escalar pra isso.
+- Chamar uma corrida agora: siga o "ROTEIRO DE CORRIDA" abaixo.
+- Acompanhar uma corrida já chamada: use "status_corrida" (precisa do código da corrida; se o cliente não souber, use "escalarParaHumano").
+- Cancelar uma corrida já chamada: use "cancelar_corrida" (mesmo código da corrida).
+- Quer ser motorista: pergunte nome e, se ele disser, cidade e se já tem veículo próprio — depois use "quero_ser_motorista".
+- Quer abrir uma central própria: pergunte nome e cidade — depois use "quero_abrir_central".
+- Só quer falar com uma pessoa, ou qualquer pedido que não se encaixe nos anteriores: use "escalarParaHumano" descrevendo o que ela quer no "resumoPedido".
+Se alguma dessas ferramentas não existir nesta conversa (integração não configurada), não invente a resposta — use "escalarParaHumano" normalmente.
 
-ROTEIRO DE CORRIDA
+ROTEIRO DE CORRIDA (chamar uma corrida agora)
 1. Descubra a origem (de onde o cliente está saindo), se ainda não souber.
 2. Descubra o destino (pra onde ele vai), se ainda não souber.
 3. Antes de confirmar qualquer um dos dois endereços, use a ferramenta "buscarEndereco" pra ter certeza que existe de verdade — sem anunciar que está "buscando", só confirme naturalmente (ex: "Beleza, Avenida Paulista, 1000 — é isso?"). Se não encontrar, peça pra detalhar ou repetir, sem assumir que está certo.
-4. Com os dois endereços confirmados, resuma o pedido e peça a confirmação final do cliente antes de seguir.
-5. Confirmado, use "escalarParaHumano" com origem e destino no "resumoPedido".
-
-Pra acompanhar uma corrida já chamada ou cancelar uma, use "escalarParaHumano" direto — isso não é algo que você resolve sozinha.`;
+4. Se o cliente perguntar o preço antes de confirmar, use "cotar_corrida" com os dois endereços — a "categoria" é o nome que veio de "consultar_disponibilidade" (campo "nome" de cada item em "categorias"), nunca um valor inventado.
+5. Com os dois endereços confirmados, resuma o pedido (e o valor, se já tiver cotado) e peça a confirmação final do cliente antes de seguir.
+6. Confirmado, use "escalarParaHumano" com origem e destino no "resumoPedido" — pedir a corrida de verdade ainda não é automático, precisa de um atendente despachando.`;
 
 /** `customerName` vem do `chatName` do webhook da Z-API (ver
  * maybeHandleInboundBotMessage) — confirmado contra dados reais que
@@ -264,7 +276,134 @@ async function recordChatUsage(
   }
 }
 
-function buildTools() {
+/** Substitui `{chave}` no template de rota (ex: `/corridas/{id}/cancelar`)
+ * pelo valor correspondente em `input`, e marca cada chave usada em
+ * `consumed` — o que resta em `input` depois disso vai pra query string
+ * (GET) ou corpo (POST), não pra rota. */
+function substitutePathParams(pathTemplate: string, input: Record<string, unknown>, consumed: Set<string>): string {
+  return pathTemplate.replace(/\{(\w+)\}/g, (_match, key: string) => {
+    consumed.add(key);
+    return encodeURIComponent(String(input[key] ?? ""));
+  });
+}
+
+/** Transforma UMA função do catálogo do MAI Drive (ver mai-drive-client.ts)
+ * numa tool de verdade que a IA pode chamar. Duas decisões de segurança,
+ * não cosméticas:
+ *
+ * 1. `telefone` nunca é exposto como parâmetro pro modelo preencher — é
+ *    sempre o número de quem está conversando (`fromPhone`, resolvido no
+ *    servidor), nunca um valor que a IA inventa ou repete de volta. Essa é
+ *    uma regra explícita do contrato combinado com o MAI Drive (ver
+ *    docs/BRIEFING-INTEGRACAO-MAIDRIVE.md, seção 3: "o telefone vem do
+ *    servidor do MAIS ZAP... nunca de um campo preenchido pela IA"). Por
+ *    isso `telefone` é removido de `properties`/`required` no schema que a
+ *    IA vê, e só é reinjetado na hora de montar a chamada real — e só
+ *    quando a função já esperava esse campo (pra não violar
+ *    `additionalProperties: false` em funções que nunca tinham `telefone`,
+ *    como `cotar_corrida`).
+ * 2. Qualquer resposta (sucesso ou `{ok: false, erro: {...}}`) é devolvida
+ *    pra IA como está — ela decide como explicar pro cliente. Falha de
+ *    rede/parse vira um erro sintético `ERRO_DE_COMUNICACAO` em vez de
+ *    lançar, mesma convenção defensiva do resto deste arquivo. */
+function buildRemoteTool(
+  entry: CatalogEntry,
+  credentials: BusinessIntegrationCredentials,
+  context: { fromPhone: string }
+) {
+  const rawSchema = (entry.parametros ?? { type: "object", properties: {} }) as Record<string, unknown>;
+  const rawProperties = (rawSchema.properties ?? {}) as Record<string, unknown>;
+  const expectsTelefone = "telefone" in rawProperties;
+
+  const properties = { ...rawProperties };
+  delete properties.telefone;
+  const required = Array.isArray(rawSchema.required)
+    ? (rawSchema.required as string[]).filter((key) => key !== "telefone")
+    : undefined;
+
+  const aiSchema = { ...rawSchema, properties, required };
+
+  // `dynamicTool`, não `tool`: o input desta função só é conhecido em
+  // tempo de execução (vem do catálogo do MAI Drive, não de um schema Zod
+  // fixo no código) — exatamente o caso que `dynamicTool` existe pra
+  // cobrir, evitando a inferência de tipo que `tool()` espera de um
+  // schema estático.
+  return dynamicTool({
+    description: entry.descricao ?? entry.nome,
+    inputSchema: jsonSchema(aiSchema as Parameters<typeof jsonSchema>[0]),
+    execute: async (rawInput) => {
+      const input = (rawInput ?? {}) as Record<string, unknown>;
+      const consumed = new Set<string>();
+      const path = substitutePathParams(entry.path ?? "", input, consumed);
+      const remaining: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(input)) {
+        if (!consumed.has(key)) remaining[key] = value;
+      }
+      if (expectsTelefone) remaining.telefone = context.fromPhone;
+
+      const url = new URL(`${credentials.baseUrl}${path}`);
+      const init: RequestInit = { headers: { "x-api-key": credentials.apiKey } };
+
+      if (entry.method === "POST") {
+        init.method = "POST";
+        init.headers = { ...init.headers, "Content-Type": "application/json" };
+        init.body = JSON.stringify(remaining);
+      } else {
+        for (const [key, value] of Object.entries(remaining)) {
+          if (value != null) url.searchParams.set(key, String(value));
+        }
+      }
+
+      await logBotEvent("info", "mai_drive_request", {
+        connectionId: credentials.id,
+        function: entry.nome,
+        method: init.method ?? "GET",
+        url: url.toString(),
+        body: entry.method === "POST" ? remaining : undefined,
+      });
+
+      try {
+        const response = await fetch(url, init);
+        const body = await response.json();
+
+        await logBotEvent("info", "mai_drive_response", {
+          connectionId: credentials.id,
+          function: entry.nome,
+          status: response.status,
+          body,
+        });
+
+        return body;
+      } catch (err) {
+        await logBotEvent("error", "mai_drive_request_failed", {
+          connectionId: credentials.id,
+          function: entry.nome,
+          error: serializeError(err),
+        });
+        return { ok: false, erro: { codigo: "ERRO_DE_COMUNICACAO" } };
+      }
+    },
+  });
+}
+
+/** Busca o catálogo cacheado (ver getCachedOrFreshCatalog) e monta uma tool
+ * por função ativa — `[]`/`{}` sem integração habilitada ou sem catálogo,
+ * nunca lança. Chamado a cada turno (o catálogo já tem seu próprio cache
+ * de 10min, não precisa de outro aqui). */
+async function buildDynamicTools(connectionId: string, fromPhone: string) {
+  const credentials = await getEnabledBusinessIntegration(connectionId);
+  if (!credentials) return {};
+
+  const catalog = await getCachedOrFreshCatalog(connectionId);
+  const tools: Record<string, ReturnType<typeof buildRemoteTool>> = {};
+  for (const entry of catalog) {
+    if (!entry.path) continue;
+    tools[entry.nome] = buildRemoteTool(entry, credentials, { fromPhone });
+  }
+  return tools;
+}
+
+async function buildTools(connectionId: string, fromPhone: string) {
   const tools = {
     escalarParaHumano: tool({
       description:
@@ -287,19 +426,21 @@ function buildTools() {
     }),
   };
 
-  if (!process.env.GOOGLE_MAPS_API_KEY) return tools;
+  const withMaps = process.env.GOOGLE_MAPS_API_KEY
+    ? {
+        ...tools,
+        buscarEndereco: tool({
+          description:
+            "Busca e valida um endereço (origem ou destino) informado pelo cliente, retornando o endereço formatado e a localização. Use antes de confirmar um pedido de corrida.",
+          inputSchema: z.object({
+            endereco: z.string().describe("Endereço completo ou parcial informado pelo cliente."),
+          }),
+          execute: async ({ endereco }) => buscarEndereco(endereco),
+        }),
+      }
+    : tools;
 
-  return {
-    ...tools,
-    buscarEndereco: tool({
-      description:
-        "Busca e valida um endereço (origem ou destino) informado pelo cliente, retornando o endereço formatado e a localização. Use antes de confirmar um pedido de corrida.",
-      inputSchema: z.object({
-        endereco: z.string().describe("Endereço completo ou parcial informado pelo cliente."),
-      }),
-      execute: async ({ endereco }) => buscarEndereco(endereco),
-    }),
-  };
+  return { ...withMaps, ...(await buildDynamicTools(connectionId, fromPhone)) };
 }
 
 /** Dispara quando a chamada ao modelo (ou o envio da resposta) falha — rate
@@ -423,7 +564,7 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
           pendingRequestSummary
         ),
         messages,
-        tools: buildTools(),
+        tools: await buildTools(connectionId, fromPhone),
         stopWhen: isStepCount(6),
       });
       return { ok: true as const, result };
