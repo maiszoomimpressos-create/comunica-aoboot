@@ -35,6 +35,10 @@ import {
   createBotMessage,
   listRecentBotMessages,
 } from "@/repositories/bot.repository";
+import { listActiveSetoresWithAttendants } from "@/repositories/setor.repository";
+import { createAndBroadcastRelaySession } from "@/services/relay-session.service";
+
+type ActiveSetor = Awaited<ReturnType<typeof listActiveSetoresWithAttendants>>[number];
 
 // Quantos turnos (mensagens IN+OUT) alimentam o contexto do modelo a cada
 // resposta — suficiente pra manter uma conversa coerente (pedir origem,
@@ -107,7 +111,8 @@ function buildSystemPrompt(
   verticalPrompt: string | null,
   businessProfile: string | null,
   customerName: string | null,
-  pendingRequestSummary?: string | null
+  pendingRequestSummary?: string | null,
+  setores?: ActiveSetor[]
 ): string {
   const base = verticalPrompt?.trim() || BASE_SYSTEM_PROMPT;
 
@@ -124,8 +129,24 @@ function buildSystemPrompt(
   const withProfile = businessProfile?.trim()
     ? `${withContext}\n\nInformações desta empresa:\n${businessProfile.trim()}`
     : withContext;
-  if (!pendingRequestSummary) return withProfile;
-  return `${withProfile}\n\nEsse cliente tinha uma solicitação em aberto, já passada pra um atendente humano: "${pendingRequestSummary}". Antes de atender o que ele disser agora, pergunte se essa solicitação já foi atendida. Se ele confirmar que sim, use a ferramenta "encerrarPedido" e siga normalmente. Se ainda não foi atendida, ou se ele trouxer um assunto totalmente novo, atenda o que ele pedir sem insistir no ponto.`;
+
+  // Setores configurados pelo tenant (ver setor.repository.ts) — a IA
+  // escolhe sozinha pelo que o cliente pediu, nunca pergunta "qual setor"
+  // (decisão confirmada: sem menu pro cliente, ver whatsapp-attendant-
+  // handoff-mechanism). Só aparece quando há pelo menos um setor com pool
+  // ativo; sem isso, "escalarParaHumano" nem ganha o campo "setor" (ver
+  // buildTools) e o comportamento fica idêntico ao de antes dos setores.
+  const withSetores =
+    setores && setores.length > 0
+      ? `${withProfile}\n\nSETORES DISPONÍVEIS PARA TRANSFERÊNCIA\n${setores
+          .map((s) => `- "${s.name}"${s.description ? `: ${s.description}` : ""}`)
+          .join(
+            "\n"
+          )}\nAo usar "escalarParaHumano", escolha o setor certo pelo que o cliente pediu — NUNCA pergunte ao cliente qual setor ele quer.`
+      : withProfile;
+
+  if (!pendingRequestSummary) return withSetores;
+  return `${withSetores}\n\nEsse cliente tinha uma solicitação em aberto, já passada pra um atendente humano: "${pendingRequestSummary}". Antes de atender o que ele disser agora, pergunte se essa solicitação já foi atendida. Se ele confirmar que sim, use a ferramenta "encerrarPedido" e siga normalmente. Se ainda não foi atendida, ou se ele trouxer um assunto totalmente novo, atenda o que ele pedir sem insistir no ponto.`;
 }
 
 /** Antes disso a IA só sabia dizer "bom dia"/"boa tarde"/"boa noite" se o
@@ -580,7 +601,17 @@ async function buildDynamicTools(connectionId: string, fromPhone: string) {
   return tools;
 }
 
-async function buildTools(connectionId: string, fromPhone: string) {
+async function buildTools(connectionId: string, fromPhone: string, setores: ActiveSetor[]) {
+  // Memoriza a última cidade/UF que o próprio modelo passou pra
+  // "buscarEndereco" nesta rodada (ver tool abaixo) e reaplica como
+  // fallback se ele chamar de novo sem "cidade" — confirmado em produção:
+  // numa mesma mensagem com origem+destino, o modelo as vezes manda
+  // "cidade" só na primeira chamada e esquece na segunda, e sem o viés
+  // espacial o Geocoding erra ou não acha o segundo endereço mesmo
+  // existindo (ver bug do "São Francisco"/Rua Padre Anchieta).
+  let cidadeConfirmada: string | undefined;
+  let ufConfirmada: string | undefined;
+
   const tools = {
     escalarParaHumano: tool({
       description:
@@ -592,6 +623,17 @@ async function buildTools(connectionId: string, fromPhone: string) {
           .describe(
             'Resumo curto do pedido em aberto (tipo de pedido + origem/destino, se já souber) — ex: "Corrida de Rua X, 580 para Rua Y, 179". Usado pra retomar o assunto se o cliente escrever de novo depois.'
           ),
+        // Só existe quando o tenant tem ao menos um setor configurado com
+        // pool ativo (z.enum não aceita lista vazia) — mantém o
+        // comportamento de hoje (sem broadcast/relay) pra quem não
+        // configurou nenhum setor ainda.
+        ...(setores.length > 0
+          ? {
+              setor: z
+                .enum(setores.map((s) => s.name) as [string, ...string[]])
+                .describe("Setor responsável por atender, escolhido por você — nunca perguntado ao cliente."),
+            }
+          : {}),
       }),
       execute: async () => ({ ok: true }),
     }),
@@ -627,7 +669,13 @@ async function buildTools(connectionId: string, fromPhone: string) {
             cidade: z.string().optional().describe("Cidade já confirmada na conversa, se houver — melhora a precisão da busca."),
             uf: z.string().optional().describe("Sigla do estado, se souber."),
           }),
-          execute: async ({ endereco, cidade, uf }) => buscarEndereco(endereco, cidade, uf),
+          execute: async ({ endereco, cidade, uf }) => {
+            const cidadeEfetiva = cidade ?? cidadeConfirmada;
+            const ufEfetiva = uf ?? ufConfirmada;
+            if (cidade) cidadeConfirmada = cidade;
+            if (uf) ufConfirmada = uf;
+            return buscarEndereco(endereco, cidadeEfetiva, ufEfetiva);
+          },
         }),
       }
     : tools;
@@ -724,6 +772,7 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
   await createBotMessage(conversation.id, "IN", text);
 
   const settings = await getAiAttendantSettings();
+  const setores = await listActiveSetoresWithAttendants(connectionId);
 
   const generated = await (async () => {
     try {
@@ -753,10 +802,11 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
           config.vertical?.systemPrompt ?? null,
           config.businessProfile,
           customerName,
-          pendingRequestSummary
+          pendingRequestSummary,
+          setores
         ),
         messages,
-        tools: await buildTools(connectionId, fromPhone),
+        tools: await buildTools(connectionId, fromPhone, setores),
         stopWhen: isStepCount(6),
       });
       return { ok: true as const, result };
@@ -820,8 +870,27 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
 
   await createBotMessage(conversation.id, "OUT", replyText);
   if (escalatedCall) {
-    const resumoPedido = (escalatedCall.input as { resumoPedido?: string }).resumoPedido ?? null;
+    const escalationInput = escalatedCall.input as { motivo?: string; resumoPedido?: string; setor?: string };
+    const resumoPedido = escalationInput.resumoPedido ?? null;
     await escalateBotConversation(conversation.id, resumoPedido);
+
+    const setor = escalationInput.setor ? setores.find((s) => s.name === escalationInput.setor) : undefined;
+    if (setor) {
+      await createAndBroadcastRelaySession({
+        connectionId,
+        conversationId: conversation.id,
+        customerPhone: fromPhone,
+        customerName,
+        setor,
+        motivo: escalationInput.motivo ?? "",
+        resumoPedido,
+        provider,
+        providerConfig,
+      });
+    }
+    // Sem setor escolhido/casado (tenant sem setor configurado, ou o nome
+    // não bateu com nenhum ativo entre a montagem da tool e agora) — mantém
+    // exatamente o comportamento de antes dos setores: só ESCALATED + resumo.
   } else if (closedCall) {
     await closeBotConversation(conversation.id);
     await logBotEvent("info", "pending_request_closed", { connectionId, fromPhone, conversationId: conversation.id });

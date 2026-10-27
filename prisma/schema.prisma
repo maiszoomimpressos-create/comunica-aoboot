@@ -139,6 +139,7 @@ model Organization {
   contacts              Contact[]
   contactLists          ContactList[]
   campaigns             Campaign[]
+  setores               Setor[]
 
   @@index([status])
   @@map("organization")
@@ -445,6 +446,8 @@ model ChannelConnection {
   processedWebhookMessages ProcessedWebhookMessage[]
   aiUsageLogs              AiUsageLog[]
   businessIntegration      BusinessIntegration?
+  setores                  Setor[]
+  relaySessions            RelaySession[]
 
   @@index([tenantId, channelId])
   @@map("channel_connection")
@@ -820,7 +823,8 @@ model BotConversation {
   connectionId String
   connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
-  messages BotMessage[]
+  messages      BotMessage[]
+  relaySessions RelaySession[]
 
   @@unique([connectionId, contactPhone])
   @@map("bot_conversation")
@@ -842,6 +846,129 @@ model BotMessage {
 
   @@index([conversationId, createdAt])
   @@map("bot_message")
+}
+
+// Departamento configurado pelo próprio tenant (ver setor.repository.ts) —
+// escopado à ChannelConnection, igual BotConfig, não à Organization direto,
+// porque o pool de atendentes é específico de um número de WhatsApp.
+// `tenantId` fica denormalizado aqui (mesmo dado que dá pra pegar via
+// connection.tenantId) só pra permitir o mesmo `updateMany({ where: { id,
+// tenantId } })` de checagem de posse que update-balance-alert-phones.ts já
+// usa, sem precisar de join em toda mutação tenant-scoped.
+model Setor {
+  id          String   @id @default(cuid())
+  name        String
+  // Texto livre do tenant descrevendo o que cai nesse setor — é isso que
+  // alimenta o prompt da IA (ver buildSystemPrompt em bot-attendant.service.ts)
+  // pra ela escolher por significado, não só pelo nome.
+  description String?
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Overrides futuros (fase 3 do plano) — colunas já existem pra não exigir
+  // migration nova quando a UI de configurar timeout por setor existir;
+  // nulo usa o default global em relay-session.service.ts.
+  noClaimTimeoutMinutes    Int?
+  inactivityTimeoutMinutes Int?
+
+  tenantId     String
+  organization Organization      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  attendants    SetorAttendant[]
+  relaySessions RelaySession[]
+
+  @@unique([connectionId, name])
+  @@index([tenantId])
+  @@map("setor")
+}
+
+// Um número do pool de atendentes de um setor. Tabela própria em vez de
+// String[] em Setor — precisa de `active` por número (tirar de rotação sem
+// apagar), unicidade por telefone, e índice pro lookup do lado do
+// atendente (ver tryHandleRelayMessage em relay-session.service.ts).
+model SetorAttendant {
+  id        String   @id @default(cuid())
+  phone     String
+  label     String?
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  setorId String
+  setor   Setor  @relation(fields: [setorId], references: [id], onDelete: Cascade)
+
+  @@unique([setorId, phone])
+  @@map("setor_attendant")
+}
+
+enum RelaySessionStatus {
+  PENDING
+  ACTIVE
+  CLOSED
+}
+
+// Uma linha por evento de escalação — não por conversa. Uma mesma
+// BotConversation pode escalar, encerrar e escalar de novo depois; cada vez
+// ganha sua própria RelaySession, sem conflito com a anterior já CLOSED
+// (por isso conversationId é indexado, não @unique). `BotConversationStatus`
+// continua só respondendo "a IA tá cuidando disso agora?" — a granularidade
+// PENDING→ACTIVE→CLOSED do handoff é responsabilidade só desta tabela.
+model RelaySession {
+  id     String             @id @default(cuid())
+  status RelaySessionStatus @default(PENDING)
+  // Código curto (ex "A3F9") mandado no broadcast — o atendente responde
+  // com ele pra reivindicar, e desambigua quando o mesmo atendente tem mais
+  // de uma sessão PENDING ao mesmo tempo (ver tryHandleRelayMessage).
+  code String @unique
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  claimedAt DateTime?
+  closedAt  DateTime?
+  // "attendant_command" | "inactivity_timeout" | "no_claim_timeout"
+  closeReason String?
+  // Bumped em toda mensagem relayada (qualquer direção) — é isso, não
+  // updatedAt, que o cron de timeout compara (ver closeStaleRelaySessions).
+  lastActivityAt DateTime @default(now())
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  setorId      String
+  setor        Setor             @relation(fields: [setorId], references: [id], onDelete: Restrict)
+  conversationId String
+  conversation   BotConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  customerPhone String
+  // Telefone real do atendente que reivindicou — null enquanto PENDING.
+  claimedByPhone String?
+  // Snapshot de quem foi avisado no broadcast original — auditoria, não
+  // muda depois (SetorAttendant pode mudar de pool sem afetar isto).
+  broadcastedTo String[]
+
+  claim RelaySessionClaim?
+
+  @@index([connectionId, customerPhone, status])
+  @@index([connectionId, claimedByPhone, status])
+  @@index([connectionId, setorId, status])
+  @@map("relay_session")
+}
+
+// Gate atômico "primeira resposta ganha" — espelha exatamente
+// ProcessedWebhookMessage/tryClaimInboundMessage: insert-and-catch a
+// violação de unique, nunca check-then-update, pra não ter janela de corrida
+// entre duas respostas de atendente quase simultâneas.
+model RelaySessionClaim {
+  id             String       @id @default(cuid())
+  relaySessionId String       @unique
+  relaySession   RelaySession @relation(fields: [relaySessionId], references: [id], onDelete: Cascade)
+  attendantPhone String
+  claimedAt      DateTime     @default(now())
+
+  @@map("relay_session_claim")
 }
 
 // Linha única (singleton) — qual modelo de IA (string "provider/model" do

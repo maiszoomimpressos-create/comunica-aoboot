@@ -36,6 +36,7 @@ import {
 import { getProviderByKey } from "@/repositories/channel-provider.repository";
 import { handleInboundMessage } from "./bot-attendant.service";
 import { tryClaimInboundMessage } from "@/repositories/bot.repository";
+import { tryHandleRelayMessage } from "@/services/relay-session.service";
 import { logBotEvent, serializeError } from "@/lib/logging/bot-attendant-logger";
 import {
   ConflictError,
@@ -509,8 +510,19 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
   }
 
   const text = isRecord(payload.text) ? payload.text.message : undefined;
-  if (typeof text === "string" && text.trim()) {
-    await handleInboundMessage({ connectionId, fromPhone, customerName, text });
+  const bodyText = typeof text === "string" && text.trim() ? text : null;
+
+  // Repasse humano (ver relay-session.service.ts): intercepta ANTES do bot
+  // de IA qualquer mensagem de quem já está dos dois lados de um handoff em
+  // andamento (cliente escalado, ou atendente com algo pendente/ativo) —
+  // `true` significa "já tratei, não deixa cair no bot". Entra depois do
+  // dedup acima (mensagem redelivered não deve ser relayada duas vezes) e
+  // antes dos branches texto/áudio normais de baixo.
+  const relayHandled = await tryHandleRelayMessage({ connectionId, fromPhone, customerName, text: bodyText });
+  if (relayHandled) return;
+
+  if (bodyText) {
+    await handleInboundMessage({ connectionId, fromPhone, customerName, text: bodyText });
     return;
   }
 
