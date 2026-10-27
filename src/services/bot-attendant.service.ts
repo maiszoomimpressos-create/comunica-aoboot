@@ -246,6 +246,15 @@ function expandStateAbbreviationsForSpeech(text: string): string {
   return text.replace(/\b([A-Z]{2})\b/g, (match, uf: string) => BRAZILIAN_STATE_NAMES[uf] ?? match);
 }
 
+/** Número do pedido (UUID) lido letra por letra em voz sai incompreensível
+ * ("vem tudo lascado") — confirmado ouvindo a resposta de voz depois de
+ * `pedir_corrida`/`pedir_entrega`. Mesma lógica do link (ver chamada de
+ * `synthesizeSpeech` abaixo): se a resposta carrega um código assim, manda
+ * como texto mesmo que a entrada tenha sido áudio. */
+function hasUnspeakableOrderCode(text: string): boolean {
+  return /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(text);
+}
+
 /** Text-to-speech for the reply, used only when the inbound message was
  * itself voice (mirrors the customer's own channel — see
  * handleInboundMessage). `null` on any failure, same degrade-to-text
@@ -777,6 +786,21 @@ async function checkOpenRideUpdate(
     await provider.sendMessage(providerConfig, fromPhone, mensagem, { delayTyping: typingDelaySeconds(mensagem) });
     await createBotMessage(conversation.id, "OUT", mensagem);
 
+    // Motorista aceitou: além do texto completo acima (com código do
+    // pedido e dados do carro — nunca narrados, ver hasUnspeakableOrderCode),
+    // manda um áudio curto só com o nome, que é a parte que faz sentido
+    // ouvir.
+    if (data.status === "motorista_a_caminho" && data.motorista?.nome) {
+      const confirmacaoVoz = `Seu motorista, ${data.motorista.nome}, aceitou a sua corrida!`;
+      const audio = await synthesizeSpeech(confirmacaoVoz);
+      if (audio) {
+        await provider.sendAudio(providerConfig, fromPhone, audio, {
+          delayTyping: typingDelaySeconds(confirmacaoVoz),
+        });
+        await createBotMessage(conversation.id, "OUT", confirmacaoVoz);
+      }
+    }
+
     if (/final|cancel/i.test(data.status)) {
       await clearOpenRide(conversation.id);
     } else {
@@ -933,10 +957,14 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
   });
 
   try {
-    // Um link narrado em voz não dá pra clicar — se a resposta carrega uma
-    // URL (ex: o link do app, ver buscarLinkApp), manda como texto mesmo
-    // que a entrada tenha sido áudio.
-    const replyAudio = inboundWasAudio && !/https?:\/\//.test(replyText) ? await synthesizeSpeech(replyText) : null;
+    // Um link narrado em voz não dá pra clicar, e um código de pedido (UUID)
+    // lido letra por letra sai incompreensível — se a resposta carrega
+    // qualquer um dos dois, manda como texto mesmo que a entrada tenha sido
+    // áudio (ver buscarLinkApp e hasUnspeakableOrderCode).
+    const replyAudio =
+      inboundWasAudio && !/https?:\/\//.test(replyText) && !hasUnspeakableOrderCode(replyText)
+        ? await synthesizeSpeech(replyText)
+        : null;
     const delayTyping = typingDelaySeconds(replyText);
     if (replyAudio) {
       await provider.sendAudio(providerConfig, fromPhone, replyAudio, { delayTyping });
