@@ -82,7 +82,7 @@ ROTEIRO DE CORRIDA/ENTREGA
 2. Descubra se é pra agora ou se o cliente quer agendar pra outro dia/horário, se ainda não souber — guarde essa informação pra incluir no resumo do pedido mais tarde. Hoje só "agora" é resolvido automaticamente; agendamento ainda não tem ferramenta disponível.
 3. Descubra a origem (endereço completo de onde o cliente/objeto está saindo), se ainda não souber.
 4. Descubra o destino. Se for corrida, é pra onde o cliente vai. Se for entrega, é pra onde o objeto vai ser levado — nesse caso descubra também o que vai ser entregue (descrição curta, ex: "caixa de documentos") e quem vai receber lá (nome e telefone com DDD).
-5. Antes de confirmar qualquer um dos endereços, use a ferramenta "buscarEndereco" pra ter certeza que existe de verdade — sem anunciar que está "buscando", só confirme naturalmente (ex: "Beleza, Avenida Paulista, 1000 — é isso?"). Se não encontrar, peça pra detalhar ou repetir, sem assumir que está certo. Guarde o "lat"/"lng" que ela devolve pra cada endereço confirmado — são as coordenadas exatas, mais precisas que o texto, e é isso que o motorista usa pra se localizar.
+5. Antes de confirmar qualquer um dos endereços, use a ferramenta "buscarEndereco" (sempre com "cidade"/"uf" já confirmados nesta conversa) pra ter certeza que existe de verdade — sem anunciar que está "buscando", só confirme naturalmente (ex: "Beleza, Avenida Paulista, 1000 — é isso?"). Se vier só uma opção, confirme assim, direto. Se vierem 2 ou 3 "opcoes", liste elas rapidamente pro cliente escolher (ex: "Achei duas: Rua X, 100, bairro A, ou Rua X, 100, bairro B — qual delas?") — nunca escolha uma sozinha quando houver mais de uma. Se não encontrar nenhuma, peça um ponto de referência (mercado, praça, escola) ou pra detalhar/repetir, sem assumir que está certo. Guarde o "lat"/"lng" da opção confirmada — são as coordenadas exatas, mais precisas que o texto, e é isso que o motorista usa pra se localizar.
 6. Escolha a categoria sozinha pelo contexto, sem transformar isso numa pergunta tipo menu: se a cidade tiver uma categoria de atendimento especializado pra mulher (veio de "consultar_disponibilidade", normalmente com "mulher" no nome) e o contexto da conversa indicar que a cliente é mulher (nome dela, ou ela mesma mencionou), use essa categoria e avise naturalmente que o pedido vai ser com atendimento especializado pra ela — só pergunte se o contexto estiver genuinamente ambíguo. Sem nenhum sinal claro, use a categoria de atendimento padrão (geral) sem nem citar a outra opção.
 7. Antes de confirmar o pedido (e sempre que o cliente perguntar o preço), use "cotar_corrida" com "origem"/"destino" como objeto "{lat, lng}" (as coordenadas que "buscarEndereco" devolveu, não o texto) sempre que já tiver validado o endereço — só use texto se por algum motivo não tiver as coordenadas ainda. Inclua "tipo" ("corrida" ou "entrega", conforme o que o cliente quer) e a "categoria" escolhida no passo anterior (campo "nome" de cada item em "categorias", nunca um valor inventado). Guarde o "cotacaoId" que ela devolve — vale só 10 minutos e só serve uma vez, então só cote de novo se o cliente demorar muito pra confirmar ou a chamada seguinte falhar por cotação vencida.
 8. Com tudo confirmado (origem, destino/entrega, e se é agora ou agendado), resuma o pedido e o valor (da última cotação) e peça a confirmação final do cliente antes de seguir.
@@ -271,21 +271,79 @@ async function fetchAppDownloadLink(tipo: "motorista" | "passageiro"): Promise<s
   }
 }
 
-/** Uma chamada ao Geocoding — isolado pra poder tentar duas vezes com
- * formatações diferentes (ver buscarEndereco). */
-async function geocode(endereco: string, apiKey: string) {
+/** Expande abreviações comuns de endereço brasileiro antes de geocodificar —
+ * clientes digitam "R.", "Av.", "n", "nº" etc., e o Geocoding lida melhor
+ * com a forma extensa (confirmado: não é a causa do bug de partial_match
+ * abaixo, mas ajuda em casos que o Geocoding erraria por abreviação
+ * ambígua, ex.: "R." também é usado pra "Rodovia"). Só expande no INÍCIO da
+ * string (tipo de logradouro) e remove o "n"/"nº"/"n°" solto antes de um
+ * número, sem tentar reescrever o resto do endereço. */
+function normalizarAbreviacoes(endereco: string): string {
+  const tipoLogradouro: Record<string, string> = {
+    "r.": "Rua",
+    "r ": "Rua ",
+    "av.": "Avenida",
+    "av ": "Avenida ",
+    "al.": "Alameda",
+    "trav.": "Travessa",
+    "pc.": "Praça",
+    "pç.": "Praça",
+    "rod.": "Rodovia",
+  };
+  let out = endereco.trim();
+  for (const [abrev, completo] of Object.entries(tipoLogradouro)) {
+    const regex = new RegExp(`^${abrev.replace(".", "\\.")}`, "i");
+    if (regex.test(out)) {
+      out = completo + out.slice(abrev.length);
+      break;
+    }
+  }
+  return out.replace(/\bn[ºo°.]?\s*(?=\d)/gi, "").replace(/\s+/g, " ").trim();
+}
+
+/** Uma chamada ao Geocoding — isolado pra poder tentar com formatações e
+ * viéses espaciais diferentes (ver buscarEndereco). `bounds` é o viewport
+ * da cidade já confirmada (ver buscarBoundsCidade) — o Geocoding usa isso
+ * como VIÉS, não filtro estrito, então ainda acha endereços fora da cidade
+ * se for isso mesmo que existir, só prioriza o que está dentro. */
+async function geocode(endereco: string, apiKey: string, bounds?: string) {
   const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
   url.searchParams.set("address", endereco);
   url.searchParams.set("key", apiKey);
   url.searchParams.set("region", "br");
   url.searchParams.set("language", "pt-BR");
+  if (bounds) url.searchParams.set("bounds", bounds);
 
   const response = await fetch(url);
   const data = await response.json();
-  const first = data?.results?.[0];
-  if (data?.status !== "OK" || !first) return null;
-  return first;
+  return Array.isArray(data?.results) && data.status === "OK" ? data.results : [];
 }
+
+/** Geocodifica só "cidade, UF" pra pegar o viewport (bounding box) dela,
+ * usado como viés espacial nas chamadas de endereço — sem isso, um nome de
+ * rua que existe em várias cidades do Brasil pode cair em outro estado.
+ * Cache simples em memória (processo vive o tempo do servidor Next, não
+ * precisa persistir) — a mesma cidade é consultada toda hora na mesma
+ * conversa. `null` se não achar (segue sem viés, não bloqueia a busca). */
+const boundsCidadeCache = new Map<string, string | null>();
+async function buscarBoundsCidade(cidade: string, uf: string | undefined, apiKey: string): Promise<string | null> {
+  const chave = `${cidade.toLowerCase()}|${uf?.toLowerCase() ?? ""}`;
+  if (boundsCidadeCache.has(chave)) return boundsCidadeCache.get(chave)!;
+
+  const query = uf ? `${cidade}, ${uf}` : cidade;
+  const [result] = await geocode(query, apiKey);
+  const viewport = result?.geometry?.viewport;
+  const bounds = viewport ? `${viewport.southwest.lat},${viewport.southwest.lng}|${viewport.northeast.lat},${viewport.northeast.lng}` : null;
+  boundsCidadeCache.set(chave, bounds);
+  return bounds;
+}
+
+function dentroDosBounds(lat: number, lng: number, bounds: string): boolean {
+  const [sw, ne] = bounds.split("|").map((p) => p.split(",").map(Number));
+  return lat >= sw[0] && lat <= ne[0] && lng >= sw[1] && lng <= ne[1];
+}
+
+type CandidatoEndereco = { enderecoFormatado: string; lat: number; lng: number };
 
 /** Google Maps Geocoding API — same provider the user's existing mobility
  * app (MAI Drive) already uses, so an address the bot confirms matches what
@@ -293,41 +351,55 @@ async function geocode(endereco: string, apiKey: string) {
  * buildTools); never throws, a miss/error just comes back as
  * `{ encontrado: false }` so the model can ask the customer to clarify.
  *
- * Confirmado contra a API real (endereço "Rua Léo Tedesco, 443, Dois
- * Vizinhos, PR", caso real de produção): quando a query tem vírgula entre o
- * número da casa e o nome da cidade (ex.: "443, Dois Vizinhos"), o Google
- * às vezes devolve um resultado de RUA TOTALMENTE DIFERENTE, mesmo com
- * `location_type: "ROOFTOP"` (alta confiança aparente) — mas sempre com
- * `partial_match: true`. A mesma rua sem vírgula ali ("443 Dois Vizinhos")
- * acha o endereço certo, com `partial_match: false`. Testado em várias
- * combinações de vírgula/UF: `partial_match` foi 100% consistente como
- * sinal (true nos errados, false nos certos) — mais confiável que tentar
- * adivinhar qual vírgula especificamente confunde o parser deles. Por
- * isso: se vier `partial_match: true`, tenta de novo com vírgulas trocadas
- * por espaço antes de desistir, em vez de confiar de cara num resultado
- * "parcial". */
-async function buscarEndereco(endereco: string): Promise<
-  { encontrado: true; enderecoFormatado: string; lat: number; lng: number } | { encontrado: false }
-> {
+ * Pedido do Neomar: precisa achar QUALQUER endereço digitado (rua+número,
+ * bairro, ponto de referência, comércio, abreviado ou escrito errado), sem
+ * travar em "não encontrado" com tanta frequência. Estratégia: gera várias
+ * variações da mesma query (abreviações expandidas, vírgulas trocadas por
+ * espaço, com/sem a cidade) e geocodifica todas com viés espacial pra
+ * cidade do cliente (se souber qual é — ver cidade/uf); mantém só os
+ * resultados que não são `partial_match` E caem dentro do viewport da
+ * cidade. Se restar mais de um endereço DISTINTO depois disso, devolve até
+ * 3 como `opcoes` pro modelo listar pro cliente escolher, em vez de chutar
+ * um — evita repetir o bug confirmado em produção (vírgula entre número e
+ * cidade fazia o Geocoding devolver uma rua errada com confiança alta,
+ * `location_type: ROOFTOP`, mas `partial_match: true`). Sem Places API
+ * habilitada nesta chave (testado: REQUEST_DENIED), então pontos de
+ * referência/comércio dependem do Geocoding achar o nome do lugar mesmo —
+ * funciona pra POIs conhecidos (confirmado: "Chaplin Centro de Eventos"
+ * acha certo), mas não é tão completo quanto Places Text Search seria. */
+async function buscarEndereco(
+  endereco: string,
+  cidade?: string,
+  uf?: string
+): Promise<{ encontrado: true; opcoes: CandidatoEndereco[] } | { encontrado: false }> {
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
   if (!apiKey) return { encontrado: false };
 
   try {
-    let first = await geocode(endereco, apiKey);
-    if (!first) return { encontrado: false };
+    const bounds = cidade ? await buscarBoundsCidade(cidade, uf, apiKey) : null;
+    const comCidade = cidade ? `${endereco}, ${cidade}${uf ? ` - ${uf}` : ""}` : endereco;
+    const normalizado = normalizarAbreviacoes(comCidade);
 
-    if (first.partial_match) {
-      const retry = await geocode(endereco.replace(/,/g, " ").replace(/\s+/g, " ").trim(), apiKey);
-      if (!retry || retry.partial_match) return { encontrado: false };
-      first = retry;
+    const variacoes = Array.from(
+      new Set([normalizado, normalizado.replace(/,/g, " ").replace(/\s+/g, " ").trim(), comCidade])
+    );
+
+    const candidatos = new Map<string, CandidatoEndereco>();
+    for (const variacao of variacoes) {
+      const results = await geocode(variacao, apiKey, bounds ?? undefined);
+      for (const r of results.slice(0, 2)) {
+        const lat = r.geometry?.location?.lat;
+        const lng = r.geometry?.location?.lng;
+        if (lat == null || lng == null) continue;
+        if (r.partial_match) continue;
+        if (bounds && !dentroDosBounds(lat, lng, bounds)) continue;
+        candidatos.set(r.formatted_address, { enderecoFormatado: r.formatted_address, lat, lng });
+      }
+      if (candidatos.size >= 3) break;
     }
 
-    return {
-      encontrado: true,
-      enderecoFormatado: first.formatted_address,
-      lat: first.geometry?.location?.lat,
-      lng: first.geometry?.location?.lng,
-    };
+    if (candidatos.size === 0) return { encontrado: false };
+    return { encontrado: true, opcoes: Array.from(candidatos.values()).slice(0, 3) };
   } catch {
     return { encontrado: false };
   }
@@ -543,11 +615,13 @@ async function buildTools(connectionId: string, fromPhone: string) {
         ...tools,
         buscarEndereco: tool({
           description:
-            "Busca e valida um endereço (origem ou destino) informado pelo cliente, retornando o endereço formatado e a localização. Use antes de confirmar um pedido de corrida.",
+            'Busca e valida um endereço (rua+número, bairro, ponto de referência ou comércio) informado pelo cliente, retornando até 3 "opcoes" com endereço formatado e coordenadas. Use antes de confirmar um pedido de corrida. Sempre passe "cidade" (e "uf" se souber) quando já estiver confirmada na conversa — melhora muito a precisão. Se vier mais de uma opção, apresente as opções pro cliente escolher, nunca escolha uma sozinha.',
           inputSchema: z.object({
-            endereco: z.string().describe("Endereço completo ou parcial informado pelo cliente."),
+            endereco: z.string().describe("Endereço completo ou parcial informado pelo cliente (rua, número, bairro, ponto de referência ou nome de comércio)."),
+            cidade: z.string().optional().describe("Cidade já confirmada na conversa, se houver — melhora a precisão da busca."),
+            uf: z.string().optional().describe("Sigla do estado, se souber."),
           }),
-          execute: async ({ endereco }) => buscarEndereco(endereco),
+          execute: async ({ endereco, cidade, uf }) => buscarEndereco(endereco, cidade, uf),
         }),
       }
     : tools;
