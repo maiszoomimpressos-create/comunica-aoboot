@@ -160,3 +160,14 @@ export async function listRecentBotMessages(conversationId: string, limit: numbe
   });
   return rows.reverse();
 }
+
+/** Apaga todo pedido via WhatsApp (conversa + mensagens) gerado antes de
+ * `cutoff` — ver data-retention.service.ts (90 dias, pedido do tenant).
+ * `onDelete: Cascade` em BotMessage/RelaySession/RelaySessionClaim
+ * (schema.prisma) já leva o resto junto, um `deleteMany` só na conversa
+ * basta. */
+export function deleteBotConversationsCreatedBefore(cutoff: Date) {
+  return prisma.botConversation.deleteMany({
+    where: { createdAt: { lt: cutoff } },
+  });
+}

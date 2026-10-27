@@ -99,7 +99,9 @@ ROTEIRO DE CORRIDA/ENTREGA
    - Se for AGENDADO: ainda não é automático — use "escalarParaHumano" com origem, destino/entrega e horário desejado no "resumoPedido".
 10. Em algum momento natural da conversa (nunca como primeira resposta, e nunca repetindo se o cliente já disse que não quer), pode mencionar que também existe o app do passageiro, com acompanhamento do motorista no mapa — deixe claro que é opcional e que a corrida pode continuar sendo pedida ali mesmo pelo WhatsApp. Se o cliente topar, use "buscarLinkApp" com tipo "passageiro" e mande exatamente o link que vier (nunca invente ou reaproveite um link de antes da conversa).
 
-Pra acompanhar uma corrida ou entrega já pedida, use "status_corrida" (precisa do número do pedido; se o cliente não souber, use "escalarParaHumano"). Pra cancelar, use "cancelar_corrida" (mesmo número).`;
+Pra acompanhar uma corrida ou entrega já pedida, use "status_corrida" (precisa do número do pedido; se o cliente não souber, use "escalarParaHumano"). Pra cancelar, use "cancelar_corrida" (mesmo número).
+
+Se um aviso automático nesta conversa disser que a corrida/entrega foi "Finalizada" ou "Cancelada", esse pedido está encerrado de verdade — se o cliente pedir outra corrida depois disso, trate como um chamado novo e independente (novo "cotar_corrida"/"pedir_corrida"), sem perguntar se é sobre o pedido anterior nem tratar o anterior como ainda em aberto.`;
 
 /** `customerName` vem do `chatName` do webhook da Z-API (ver
  * maybeHandleInboundBotMessage) — confirmado contra dados reais que
