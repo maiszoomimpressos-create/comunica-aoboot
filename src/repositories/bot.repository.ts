@@ -119,6 +119,29 @@ export function touchBotConversation(conversationId: string) {
   });
 }
 
+/** Começa (ou substitui) o acompanhamento de uma corrida/entrega nesta
+ * conversa — ver checkOpenRideUpdate em bot-attendant.service.ts. */
+export function setOpenRide(conversationId: string, rideId: string, status: string) {
+  return prisma.botConversation.update({
+    where: { id: conversationId },
+    data: { openRideId: rideId, openRideStatus: status },
+  });
+}
+
+export function updateOpenRideStatus(conversationId: string, status: string) {
+  return prisma.botConversation.update({
+    where: { id: conversationId },
+    data: { openRideStatus: status },
+  });
+}
+
+export function clearOpenRide(conversationId: string) {
+  return prisma.botConversation.update({
+    where: { id: conversationId },
+    data: { openRideId: null, openRideStatus: null },
+  });
+}
+
 export function createBotMessage(
   conversationId: string,
   direction: BotMessageDirection,

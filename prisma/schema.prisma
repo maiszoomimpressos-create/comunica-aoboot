@@ -820,6 +820,16 @@ model BotConversation {
   // encerrada dois turnos depois de supostamente ter "esquecido" dela).
   contextStartAt DateTime @default(now())
 
+  // Corrida/entrega em acompanhamento nesta conversa (id + último status
+  // conhecido, vindos de pedir_corrida/pedir_entrega/status_corrida — ver
+  // bot-attendant.service.ts). Usado pra checar sozinho se mudou a cada
+  // mensagem nova do cliente e avisar sem ele precisar perguntar —
+  // stopgap até existir o webhook de status do MAI Drive (ver
+  // docs/RESPOSTA-PARA-MAIDRIVE-WEBHOOK-STATUS.md). `null` = nada em
+  // acompanhamento.
+  openRideId     String?
+  openRideStatus String?
+
   connectionId String
   connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 

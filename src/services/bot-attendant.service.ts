@@ -34,6 +34,9 @@ import {
   touchBotConversation,
   createBotMessage,
   listRecentBotMessages,
+  setOpenRide,
+  updateOpenRideStatus,
+  clearOpenRide,
 } from "@/repositories/bot.repository";
 import { listActiveSetoresWithAttendants } from "@/repositories/setor.repository";
 import { createAndBroadcastRelaySession } from "@/services/relay-session.service";
@@ -715,6 +718,73 @@ async function handleReplyFailure(
   }
 }
 
+/** Confere sozinho se a corrida/entrega em acompanhamento desta conversa
+ * mudou de status, e já avisa o cliente sem ele precisar perguntar —
+ * stopgap pro webhook de status do MAI Drive, que ainda não existe (ver
+ * docs/RESPOSTA-PARA-MAIDRIVE-WEBHOOK-STATUS.md: falta o guia deles e o
+ * cadastro da nossa URL). Chamado a cada mensagem nova do cliente
+ * enquanto `openRideId` está preenchido (ver setOpenRide); usa o mesmo
+ * endpoint que o tool `status_corrida` chamaria, só que direto, fora do
+ * loop da IA. Nunca lança — é um extra, não pode impedir o resto da
+ * mensagem de ser processado. */
+async function checkOpenRideUpdate(
+  connectionId: string,
+  fromPhone: string,
+  conversation: { id: string; openRideId: string | null; openRideStatus: string | null },
+  provider: WhatsappProvider,
+  providerConfig: WhatsappConnectionConfig
+): Promise<void> {
+  if (!conversation.openRideId) return;
+
+  try {
+    const credentials = await getEnabledBusinessIntegration(connectionId);
+    if (!credentials) return;
+
+    const url = new URL(`${credentials.baseUrl}/corridas/${conversation.openRideId}`);
+    url.searchParams.set("telefone", normalizeBrazilianMobile(fromPhone));
+
+    const response = await fetch(url, { headers: { "x-api-key": credentials.apiKey } });
+    const body = await response.json().catch(() => null);
+    await logBotEvent("info", "mai_drive_response", {
+      connectionId,
+      function: "status_corrida_auto",
+      status: response.status,
+      body,
+    });
+
+    const data = body?.ok
+      ? (body.data as {
+          status?: string;
+          statusTexto?: string;
+          valor?: number;
+          motorista?: { nome?: string; veiculo?: string; placa?: string };
+        })
+      : null;
+    if (!data?.status || data.status === conversation.openRideStatus) return;
+
+    const partes = [`Atualização da sua corrida: ${data.statusTexto ?? data.status}.`];
+    if (data.motorista?.nome) {
+      const veiculoPlaca = [data.motorista.veiculo, data.motorista.placa].filter(Boolean).join(", placa ");
+      partes.push(`Motorista: ${data.motorista.nome}${veiculoPlaca ? ` (${veiculoPlaca})` : ""}.`);
+    }
+    if (data.valor != null && /final/i.test(data.status)) {
+      partes.push(`Valor: R$ ${data.valor.toFixed(2)}.`);
+    }
+    const mensagem = partes.join(" ");
+
+    await provider.sendMessage(providerConfig, fromPhone, mensagem, { delayTyping: typingDelaySeconds(mensagem) });
+    await createBotMessage(conversation.id, "OUT", mensagem);
+
+    if (/final|cancel/i.test(data.status)) {
+      await clearOpenRide(conversation.id);
+    } else {
+      await updateOpenRideStatus(conversation.id, data.status);
+    }
+  } catch (err) {
+    await logBotEvent("warn", "open_ride_check_failed", { connectionId, fromPhone, error: serializeError(err) });
+  }
+}
+
 /** Entry point called from the inbound webhook pipeline (see
  * maybeHandleInboundBotMessage in whatsapp-connection.service.ts). Never
  * throws — any failure here must not break the webhook's fast-ack
@@ -770,6 +840,7 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
   }
 
   await createBotMessage(conversation.id, "IN", text);
+  await checkOpenRideUpdate(connectionId, fromPhone, conversation, provider, providerConfig);
 
   const settings = await getAiAttendantSettings();
   const setores = await listActiveSetoresWithAttendants(connectionId);
@@ -827,6 +898,19 @@ export async function handleInboundMessage(input: HandleInboundMessageInput): Pr
   const result = generated.result;
 
   await recordChatUsage(connectionId, settings.model, result.usage);
+
+  // Começa/encerra o acompanhamento de corrida (ver checkOpenRideUpdate)
+  // sempre que a própria IA pediu ou cancelou uma corrida/entrega agora.
+  for (const toolResult of result.toolResults) {
+    if (!["pedir_corrida", "pedir_entrega", "cancelar_corrida"].includes(toolResult.toolName)) continue;
+    const output = toolResult.output as { ok?: boolean; data?: { id?: string; status?: string } } | undefined;
+    if (!output?.ok || !output.data) continue;
+    if (toolResult.toolName === "cancelar_corrida") {
+      await clearOpenRide(conversation.id);
+    } else if (output.data.id && output.data.status) {
+      await setOpenRide(conversation.id, output.data.id, output.data.status);
+    }
+  }
 
   const escalatedCall = result.toolCalls.find((call) => call.toolName === "escalarParaHumano");
   const closedCall = result.toolCalls.find((call) => call.toolName === "encerrarPedido");
