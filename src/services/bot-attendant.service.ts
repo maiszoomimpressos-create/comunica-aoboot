@@ -13,6 +13,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import { decryptSecret } from "@/lib/crypto/secret-box";
 import { getWhatsappProvider } from "@/lib/whatsapp/registry";
+import { normalizeBrazilianMobile } from "@/lib/whatsapp/phone-format";
 import type { WhatsappProvider } from "@/lib/whatsapp/provider";
 import type { WhatsappConnectionConfig } from "@/lib/whatsapp/types";
 import { getConnectionCredentialsById } from "@/repositories/channel-connection.repository";
@@ -87,7 +88,7 @@ ROTEIRO DE CORRIDA/ENTREGA
 7. Antes de confirmar o pedido (e sempre que o cliente perguntar o preço), use "cotar_corrida" com "origem"/"destino" como objeto "{lat, lng}" (as coordenadas que "buscarEndereco" devolveu, não o texto) sempre que já tiver validado o endereço — só use texto se por algum motivo não tiver as coordenadas ainda. Inclua "tipo" ("corrida" ou "entrega", conforme o que o cliente quer) e a "categoria" escolhida no passo anterior (campo "nome" de cada item em "categorias", nunca um valor inventado). Guarde o "cotacaoId" que ela devolve — vale só 10 minutos e só serve uma vez, então só cote de novo se o cliente demorar muito pra confirmar ou a chamada seguinte falhar por cotação vencida.
 8. Com tudo confirmado (origem, destino/entrega, e se é agora ou agendado), resuma o pedido e o valor (da última cotação) e peça a confirmação final do cliente antes de seguir.
 9. Confirmado:
-   - Se for AGORA: use "pedir_corrida" (corrida) ou "pedir_entrega" (entrega) com o "cotacaoId" da última cotação — pra entrega, inclua também "objeto", "destinatarioNome" e "destinatarioTelefone". Diga ao cliente o número do pedido; se for entrega, diga também o código de 4 dígitos e explique que ele precisa passar esse código pra quem vai receber, porque o motorista vai pedir esse código na hora da entrega. Se a chamada falhar (ex: cotação vencida), cote de novo com "cotar_corrida" e tente de novo antes de desistir; se continuar falhando, use "escalarParaHumano".
+   - Se for AGORA: use "pedir_corrida" (corrida) ou "pedir_entrega" (entrega) com o "cotacaoId" da última cotação. Inclua "nome" com o nome do passageiro — se você já souber o nome dele nesta conversa (do WhatsApp ou porque ele disse), use direto, sem perguntar de novo; só pergunte o nome antes de confirmar se ainda não souber. Pra entrega, inclua também "objeto", "destinatarioNome" e "destinatarioTelefone". NUNCA peça o telefone do próprio cliente — esse dado já vem automático do WhatsApp dele, nenhuma ferramenta de corrida/entrega pede isso como pergunta pro cliente. Diga ao cliente o número do pedido; se for entrega, diga também o código de 4 dígitos e explique que ele precisa passar esse código pra quem vai receber, porque o motorista vai pedir esse código na hora da entrega. Se a chamada falhar (ex: cotação vencida), cote de novo com "cotar_corrida" e tente de novo antes de desistir; se continuar falhando (e NUNCA insistindo em pedir o telefone do cliente), use "escalarParaHumano".
    - Se for AGENDADO: ainda não é automático — use "escalarParaHumano" com origem, destino/entrega e horário desejado no "resumoPedido".
 10. Em algum momento natural da conversa (nunca como primeira resposta, e nunca repetindo se o cliente já disse que não quer), pode mencionar que também existe o app do passageiro, com acompanhamento do motorista no mapa — deixe claro que é opcional e que a corrida pode continuar sendo pedida ali mesmo pelo WhatsApp. Se o cliente topar, use "buscarLinkApp" com tipo "passageiro" e mande exatamente o link que vier (nunca invente ou reaproveite um link de antes da conversa).
 
@@ -472,7 +473,12 @@ function substitutePathParams(pathTemplate: string, input: Record<string, unknow
  *    IA vê, e só é reinjetado na hora de montar a chamada real — e só
  *    quando a função já esperava esse campo (pra não violar
  *    `additionalProperties: false` em funções que nunca tinham `telefone`,
- *    como `cotar_corrida`).
+ *    como `cotar_corrida`). Também passa por `normalizeBrazilianMobile`
+ *    antes de ir pra MAI Drive — confirmado em produção que o Z-API às
+ *    vezes entrega `fromPhone` sem o 9º dígito, o que a MAI Drive rejeita
+ *    como celular inválido. Pedir pro cliente redigitar o número (como a
+ *    IA tentou fazer sozinha nesse caso) não ajuda em nada: o valor
+ *    digitado por ele nunca é usado aqui, só o `fromPhone` do servidor.
  * 2. Qualquer resposta (sucesso ou `{ok: false, erro: {...}}`) é devolvida
  *    pra IA como está — ela decide como explicar pro cliente. Falha de
  *    rede/parse vira um erro sintético `ERRO_DE_COMUNICACAO` em vez de
@@ -510,7 +516,7 @@ function buildRemoteTool(
       for (const [key, value] of Object.entries(input)) {
         if (!consumed.has(key)) remaining[key] = value;
       }
-      if (expectsTelefone) remaining.telefone = context.fromPhone;
+      if (expectsTelefone) remaining.telefone = normalizeBrazilianMobile(context.fromPhone);
 
       const url = new URL(`${credentials.baseUrl}${path}`);
       const init: RequestInit = { headers: { "x-api-key": credentials.apiKey } };
