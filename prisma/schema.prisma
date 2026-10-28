@@ -448,6 +448,10 @@ model ChannelConnection {
   businessIntegration      BusinessIntegration?
   setores                  Setor[]
   relaySessions            RelaySession[]
+  flows                    Flow[]
+  flowSessions             FlowSession[]
+  knowledgeEntries         KnowledgeEntry[]
+  knowledgeCorrections     KnowledgeCorrection[]
 
   @@index([tenantId, channelId])
   @@map("channel_connection")
@@ -979,6 +983,129 @@ model RelaySessionClaim {
   claimedAt      DateTime     @default(now())
 
   @@map("relay_session_claim")
+}
+
+enum FlowStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+// Fluxo conversacional visual (editor drag-and-drop no painel) — escopado
+// por ChannelConnection, mesmo raciocínio de BotConfig/Setor: um fluxo é
+// específico de um número de WhatsApp, não da Organization inteira.
+// `draftGraph` é o que o editor mostra/salva a cada edição; `publishedGraph`
+// é o snapshot que o motor (flow-engine.service.ts, ainda não construído)
+// de fato executa — só avança quando o tenant aperta "Publicar", pra nunca
+// mudar o comportamento de uma conversa em andamento no meio de uma edição.
+model Flow {
+  id             String     @id @default(cuid())
+  name           String
+  status         FlowStatus @default(DRAFT)
+  draftGraph     Json
+  publishedGraph Json?
+  publishedAt    DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  sessions FlowSession[]
+
+  @@index([connectionId, status])
+  @@map("flow")
+}
+
+enum FlowSessionStatus {
+  ACTIVE
+  COMPLETED
+}
+
+// Estado de execução do fluxo por contato — em qual nó ele está agora e as
+// variáveis já coletadas (origem/destino, resposta de uma pergunta, etc).
+// Único por (connectionId, contactPhone), mesmo padrão de
+// BotConversation: um contato só pode estar num ponto do fluxo por vez
+// nesta conexão.
+model FlowSession {
+  id            String            @id @default(cuid())
+  currentNodeId String?
+  variables     Json              @default("{}")
+  status        FlowSessionStatus @default(ACTIVE)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  flowId String
+  flow   Flow   @relation(fields: [flowId], references: [id], onDelete: Cascade)
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  contactPhone String
+
+  @@unique([connectionId, contactPhone])
+  @@map("flow_session")
+}
+
+enum KnowledgeEntrySource {
+  MANUAL
+  CORRECTION
+}
+
+// Ficha de conhecimento que alimenta o prompt do atendente de IA (ver
+// bot-attendant.service.ts) — igual BotConfig.businessProfile, mas em
+// fichas curtas em vez de um textão só, pra o tenant (ou uma correção
+// aceita, ver KnowledgeCorrection) adicionar/editar um item sem reescrever
+// tudo. Escopada por connectionId pelo mesmo motivo de Setor/BotConfig.
+// Consumo pelo motor da IA é trabalho de uma fase futura — esta é só a
+// tabela.
+model KnowledgeEntry {
+  id        String               @id @default(cuid())
+  title     String
+  content   String
+  active    Boolean              @default(true)
+  source    KnowledgeEntrySource @default(MANUAL)
+  sortOrder Int                  @default(0)
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  corrections KnowledgeCorrection[]
+
+  @@index([connectionId, active])
+  @@map("knowledge_entry")
+}
+
+enum KnowledgeCorrectionStatus {
+  PENDING
+  APPLIED
+  DISMISSED
+}
+
+// Fila de correções apontadas pelo tenant/atendente sobre uma resposta real
+// da IA ("treino por correção") — não altera o comportamento da IA
+// sozinha; alguém revisa (hoje: nós, direto no banco; depois: um revisor no
+// painel) e decide transformar isso numa KnowledgeEntry. Guarda a pergunta
+// e a resposta errada só como contexto pra quem revisa.
+model KnowledgeCorrection {
+  id            String                    @id @default(cuid())
+  customerPhone String?
+  question      String
+  wrongAnswer   String
+  suggestedFix  String
+  status        KnowledgeCorrectionStatus @default(PENDING)
+  createdAt     DateTime                  @default(now())
+  reviewedAt    DateTime?
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  resultingEntryId String?
+  resultingEntry   KnowledgeEntry? @relation(fields: [resultingEntryId], references: [id], onDelete: SetNull)
+
+  @@index([connectionId, status])
+  @@map("knowledge_correction")
 }
 
 // Linha única (singleton) — qual modelo de IA (string "provider/model" do
