@@ -37,6 +37,7 @@ import { getProviderByKey } from "@/repositories/channel-provider.repository";
 import { handleInboundMessage } from "./bot-attendant.service";
 import { tryClaimInboundMessage } from "@/repositories/bot.repository";
 import { tryHandleRelayMessage } from "@/services/relay-session.service";
+import { tryHandleFlowMessage } from "@/services/flow-engine.service";
 import { logBotEvent, serializeError } from "@/lib/logging/bot-attendant-logger";
 import {
   ConflictError,
@@ -520,6 +521,14 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
   // antes dos branches texto/áudio normais de baixo.
   const relayHandled = await tryHandleRelayMessage({ connectionId, fromPhone, customerName, text: bodyText });
   if (relayHandled) return;
+
+  // Fluxo visual (ver flow-engine.service.ts): só intercepta quando esta
+  // conexão tem um Flow PUBLISHED — senão retorna `false` e cai pro
+  // atendente de IA normalmente, exatamente como hoje. Entra depois do
+  // relay humano (uma conversa já escalada não deve voltar pro fluxo) e
+  // antes dos branches texto/áudio de handleInboundMessage.
+  const flowHandled = await tryHandleFlowMessage({ connectionId, fromPhone, customerName, text: bodyText });
+  if (flowHandled) return;
 
   if (bodyText) {
     await handleInboundMessage({ connectionId, fromPhone, customerName, text: bodyText });
