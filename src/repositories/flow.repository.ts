@@ -22,9 +22,16 @@ export function findPublishedFlowForConnection(connectionId: string) {
   });
 }
 
+/** Grafo inicial de um fluxo novo — já vem com o nó de Início posicionado,
+ * pra o editor nunca abrir numa tela totalmente vazia e pra validatePublishableGraph
+ * (ver flow.service.ts) já ter o que exige de cara. */
 export function createFlowRecord(connectionId: string, name: string) {
   return prisma.flow.create({
-    data: { connectionId, name, draftGraph: { nodes: [], edges: [] } },
+    data: {
+      connectionId,
+      name,
+      draftGraph: { nodes: [{ id: "start", type: "start", position: { x: 250, y: 50 } }], edges: [] },
+    },
   });
 }
 

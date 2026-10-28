@@ -15,6 +15,12 @@ export function listFlows(connectionId: string) {
   return listFlowsForConnection(connectionId);
 }
 
+export async function getFlow(tenantId: string, flowId: string) {
+  const flow = await findFlowForTenant(tenantId, flowId);
+  if (!flow) throw new NotFoundError("Fluxo não encontrado.");
+  return flow;
+}
+
 export async function createFlow(tenantId: string, connectionId: string, name: string) {
   if (!name.trim()) throw new ValidationError("Informe o nome do fluxo.");
   // checagem de posse: a conexão precisa pertencer a este tenant
@@ -64,11 +70,26 @@ export async function publishFlow(tenantId: string, flowId: string) {
       where: { connectionId: existing.connectionId, status: "PUBLISHED", id: { not: flowId } },
       data: { status: "ARCHIVED" },
     });
+    // "Modo de atendimento" é um dado derivado (Flow publicado > BotConfig.enabled),
+    // não uma coluna própria — isto só torna a exclusividade explícita: uma vez
+    // publicado, o fluxo assume e a IA genérica desta conexão é desligada, em vez
+    // de ficar silenciosamente inalcançável enquanto o toggle ainda mostra "ligado".
+    await tx.botConfig.updateMany({ where: { connectionId: existing.connectionId }, data: { enabled: false } });
     return tx.flow.update({
       where: { id: flowId },
       data: { status: "PUBLISHED", publishedGraph: graph as unknown as Prisma.InputJsonValue, publishedAt: new Date() },
     });
   });
+}
+
+/** Volta a conexão pro modo IA sem apagar o fluxo (fica ARCHIVED, pode
+ * publicar de novo depois). Contraparte de publishFlow — não religa
+ * BotConfig.enabled automaticamente, já que o tenant pode ter desligado a
+ * IA por outro motivo; só libera o caminho pra ela voltar a responder. */
+export async function unpublishFlow(tenantId: string, flowId: string) {
+  const existing = await findFlowForTenant(tenantId, flowId);
+  if (!existing) throw new NotFoundError("Fluxo não encontrado.");
+  return prisma.flow.update({ where: { id: flowId }, data: { status: "ARCHIVED" } });
 }
 
 export async function deleteFlow(tenantId: string, flowId: string) {
