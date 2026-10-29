@@ -12,6 +12,7 @@ export type FlowNodeType =
   | "menu"
   | "question"
   | "condition"
+  | "form"
   | "end"
   | "ai"
   | "action"
@@ -20,6 +21,19 @@ export type FlowNodeType =
 export interface FlowMenuOption {
   id: string;
   label: string;
+}
+
+// Tipo de validação aplicada à resposta de um campo de nó `form` — ver
+// field-validation.ts. "text" aceita qualquer coisa não vazia.
+export type FormFieldType = "text" | "phone" | "cpf" | "date" | "email" | "number";
+
+export interface FormFieldDef {
+  id: string;
+  label: string;
+  // Nome da variável onde a resposta validada é salva em FlowSession.variables
+  // (mesma convenção do campo `variable` do nó `question`).
+  variable: string;
+  fieldType: FormFieldType;
 }
 
 export interface FlowNode {
@@ -32,6 +46,8 @@ export interface FlowNode {
     variable?: string;
     operator?: "equals" | "contains";
     value?: string;
+    title?: string;
+    fields?: FormFieldDef[];
     [key: string]: unknown;
   };
 }
@@ -44,6 +60,9 @@ export interface FlowEdge {
   // única saída (start/message/question).
   sourceHandle?: string | null;
   target: string;
+  // Em qual ponto de conexão do nó de destino a aresta entra — puramente
+  // visual (editor), o motor ignora.
+  targetHandle?: string | null;
 }
 
 export interface FlowGraph {

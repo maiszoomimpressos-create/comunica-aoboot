@@ -1,7 +1,7 @@
 "use client";
 
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { Play, MessageSquare, ListChecks, CircleHelp, GitBranch, Square } from "lucide-react";
+import { Play, MessageSquare, ListChecks, CircleHelp, GitBranch, Square, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FlowNode as FlowNodeData } from "@/lib/flow/types";
 
@@ -13,6 +13,7 @@ const BORDER_ACCENT: Record<string, string> = {
   menu: "border-l-primary",
   question: "border-l-warning",
   condition: "border-l-warning",
+  form: "border-l-blue-500",
   end: "border-l-muted-foreground",
 };
 
@@ -22,6 +23,7 @@ const ICON_ACCENT: Record<string, string> = {
   menu: "text-primary",
   question: "text-warning",
   condition: "text-warning",
+  form: "text-blue-500",
   end: "text-muted-foreground",
 };
 
@@ -59,6 +61,9 @@ export function StartNode({ selected }: RFNodeProps) {
   return (
     <NodeShell type="start" icon={<Play className="size-3.5" />} title="Início" selected={selected}>
       Mensagem recebida
+      <Handle type="source" position={Position.Top} id="top" />
+      <Handle type="source" position={Position.Left} id="left" />
+      <Handle type="source" position={Position.Right} id="right" />
       <Handle type="source" position={Position.Bottom} />
     </NodeShell>
   );
@@ -69,6 +74,8 @@ export function MessageNode({ data, selected }: RFNodeProps) {
     <NodeShell type="message" icon={<MessageSquare className="size-3.5" />} title="Mensagem" selected={selected}>
       {data?.text || "Sem texto ainda"}
       <Handle type="target" position={Position.Top} />
+      <Handle type="source" position={Position.Left} id="left" />
+      <Handle type="source" position={Position.Right} id="right" />
       <Handle type="source" position={Position.Bottom} />
     </NodeShell>
   );
@@ -107,6 +114,9 @@ export function MenuNode({ data, selected }: RFNodeProps) {
         ))}
       </div>
       <Handle type="target" position={Position.Top} />
+      <Handle type="target" position={Position.Left} id="left" isConnectableStart={false} />
+      <Handle type="target" position={Position.Right} id="right" isConnectableStart={false} />
+      <Handle type="target" position={Position.Bottom} id="bottom" isConnectableStart={false} />
     </div>
   );
 }
@@ -117,6 +127,8 @@ export function QuestionNode({ data, selected }: RFNodeProps) {
       {data?.text || "Sem texto ainda"}
       {data?.variable ? ` → {${data.variable}}` : ""}
       <Handle type="target" position={Position.Top} />
+      <Handle type="source" position={Position.Left} id="left" />
+      <Handle type="source" position={Position.Right} id="right" />
       <Handle type="source" position={Position.Bottom} />
     </NodeShell>
   );
@@ -149,6 +161,32 @@ export function ConditionNode({ data, selected }: RFNodeProps) {
         </span>
       </div>
       <Handle type="target" position={Position.Top} />
+      <Handle type="target" position={Position.Left} id="left" isConnectableStart={false} />
+      <Handle type="target" position={Position.Right} id="right" isConnectableStart={false} />
+    </div>
+  );
+}
+
+export function FormNode({ data, selected }: RFNodeProps) {
+  const fields = data?.fields ?? [];
+  return (
+    <div
+      className={cn(
+        "w-56 rounded-lg border-l-4 border-blue-500 bg-card px-3 py-2.5 shadow-sm",
+        selected && "ring-2 ring-ring"
+      )}
+    >
+      <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+        <FileText className="size-3.5 text-blue-500" />
+        {data?.title || "Formulário"}
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        {fields.length === 0 ? "Sem campos ainda" : `${fields.length} campo${fields.length > 1 ? "s" : ""}`}
+      </p>
+      <Handle type="target" position={Position.Top} />
+      <Handle type="source" position={Position.Left} id="left" />
+      <Handle type="source" position={Position.Right} id="right" />
+      <Handle type="source" position={Position.Bottom} />
     </div>
   );
 }
@@ -158,6 +196,9 @@ export function EndNode({ data, selected }: RFNodeProps) {
     <NodeShell type="end" icon={<Square className="size-3.5" />} title="Fim" selected={selected}>
       {data?.text || "Encerra a conversa"}
       <Handle type="target" position={Position.Top} />
+      <Handle type="target" position={Position.Left} id="left" />
+      <Handle type="target" position={Position.Right} id="right" />
+      <Handle type="target" position={Position.Bottom} id="bottom" />
     </NodeShell>
   );
 }
@@ -168,5 +209,6 @@ export const FLOW_NODE_TYPES = {
   menu: MenuNode,
   question: QuestionNode,
   condition: ConditionNode,
+  form: FormNode,
   end: EndNode,
 };

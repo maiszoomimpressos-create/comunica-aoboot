@@ -11,6 +11,8 @@ import {
   completeFlowSession,
 } from "@/repositories/flow.repository";
 import { isFlowGraph, type FlowGraph, type FlowNode, type FlowMenuOption } from "@/lib/flow/types";
+import { validateFormField } from "@/lib/flow/field-validation";
+import { createFormSubmissionDocument } from "@/services/form-submission.service";
 import { logBotEvent, serializeError } from "@/lib/logging/bot-attendant-logger";
 
 // Limite de nós visitados num único turno — guarda contra um grafo
@@ -187,6 +189,92 @@ export async function tryHandleFlowMessage(params: {
       if (node.data?.text) await provider.sendMessage(providerConfig, fromPhone, node.data.text);
       waitingNodeId = node.id;
       break;
+    }
+
+    if (node.type === "form") {
+      const fields = node.data?.fields ?? [];
+      const progress = variables.__formProgress as { nodeId: string; index: number } | undefined;
+      const isActiveHere = !isFresh && session.currentNodeId === node.id && progress?.nodeId === node.id;
+
+      if (fields.length === 0) {
+        await logBotEvent("warn", "flow_form_without_fields", { connectionId, flowId: flow.id, nodeId: node.id });
+        const next = outgoing(node.id)[0];
+        if (!next) break;
+        nodeId = next.target;
+        continue;
+      }
+
+      if (!isActiveHere) {
+        variables.__formProgress = { nodeId: node.id, index: 0 };
+        await provider.sendMessage(providerConfig, fromPhone, fields[0].label);
+        waitingNodeId = node.id;
+        break;
+      }
+
+      const idx = progress!.index;
+
+      if (idx < fields.length) {
+        const field = fields[idx];
+        const result = validateFormField(field.fieldType, text!);
+        if (!result.valid) {
+          await provider.sendMessage(providerConfig, fromPhone, `${result.error}\n${field.label}`);
+          waitingNodeId = node.id;
+          break;
+        }
+        variables[field.variable] = result.normalized;
+        const nextIndex = idx + 1;
+        variables.__formProgress = { nodeId: node.id, index: nextIndex };
+        if (nextIndex < fields.length) {
+          await provider.sendMessage(providerConfig, fromPhone, fields[nextIndex].label);
+          waitingNodeId = node.id;
+          break;
+        }
+        const summary = fields.map((f) => `${f.label}: ${variables[f.variable]}`).join("\n");
+        await provider.sendMessage(
+          providerConfig,
+          fromPhone,
+          `Confira suas respostas:\n${summary}\n\nDigite ENVIAR para confirmar ou CORRIGIR para refazer.`
+        );
+        waitingNodeId = node.id;
+        break;
+      }
+
+      // idx === fields.length: esperando ENVIAR/CORRIGIR depois do resumo.
+      const answer = text!.trim().toLowerCase();
+      if (answer === "corrigir") {
+        variables.__formProgress = { nodeId: node.id, index: 0 };
+        await provider.sendMessage(providerConfig, fromPhone, fields[0].label);
+        waitingNodeId = node.id;
+        break;
+      }
+      if (answer !== "enviar") {
+        await provider.sendMessage(
+          providerConfig,
+          fromPhone,
+          "Digite ENVIAR para confirmar ou CORRIGIR para refazer."
+        );
+        waitingNodeId = node.id;
+        break;
+      }
+
+      const answers = Object.fromEntries(fields.map((f) => [f.variable, variables[f.variable]]));
+      await createFormSubmissionDocument({
+        connectionId,
+        flowId: flow.id,
+        nodeId: node.id,
+        title: node.data?.title || "Formulário",
+        contactPhone: fromPhone,
+        fields,
+        answers,
+      });
+      delete variables.__formProgress;
+      const next = outgoing(node.id)[0];
+      if (!next) {
+        await completeFlowSession(session.id);
+        return true;
+      }
+      nodeId = next.target;
+      continue;
     }
 
     if (node.type === "condition") {

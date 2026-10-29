@@ -28,6 +28,8 @@
     "@hookform/resolvers": "^5.7.1",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
+    "@react-pdf/renderer": "^4.9.0",
+    "@vercel/blob": "^2.8.2",
     "@xyflow/react": "^12.12.0",
     "ai": "^7.0.147",
     "better-auth": "^1.6.26",

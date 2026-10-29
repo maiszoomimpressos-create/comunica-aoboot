@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -9,12 +9,15 @@ import {
   Background,
   BackgroundVariant,
   Controls,
+  ConnectionMode,
   addEdge,
+  reconnectEdge,
   useNodesState,
   useEdgesState,
   type Connection,
   type Node,
   type Edge,
+  type OnReconnect,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
@@ -26,6 +29,8 @@ import {
   Square,
   Rocket,
   Undo2,
+  FileText,
+  ClipboardList,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -60,6 +65,7 @@ const PALETTE: { type: FlowNodeType; label: string; icon: React.ReactNode; defau
     icon: <GitBranch className="size-4" />,
     defaultData: { variable: "", operator: "equals", value: "" },
   },
+  { type: "form", label: "Formulário", icon: <FileText className="size-4" />, defaultData: { title: "", fields: [] } },
   { type: "end", label: "Fim", icon: <Square className="size-4" />, defaultData: { text: "" } },
 ];
 
@@ -74,7 +80,13 @@ function toFlowNodes(graph: FlowGraph): Node[] {
 }
 
 function toFlowEdges(graph: FlowGraph): Edge[] {
-  return graph.edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? null }));
+  return graph.edges.map((e) => ({
+    id: e.id,
+    source: e.source,
+    target: e.target,
+    sourceHandle: e.sourceHandle ?? null,
+    targetHandle: e.targetHandle ?? null,
+  }));
 }
 
 function newId() {
@@ -107,7 +119,49 @@ function FlowEditorInner({
 
   const selectedNode = useMemo(() => nodes.find((n) => n.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
 
-  const onConnect = useCallback((connection: Connection) => setEdges((eds) => addEdge(connection, eds)), [setEdges]);
+  // Nós de saída única (start/message/question/form) só podem ter UMA aresta
+  // saindo, não importa de qual lado do retângulo ela foi puxada — o motor
+  // (flow-engine.service.ts) ignora o handle pra esses tipos e sempre segue
+  // a primeira aresta encontrada, então uma segunda seria enganosa (criaria
+  // a ilusão de uma ramificação que o motor nunca usa). Pra menu/condition,
+  // cada opção/branch (handle) é uma saída de verdade e pode ter sua própria
+  // aresta. Em ambos os casos, conectar de novo a partir da mesma saída
+  // substitui a aresta antiga em vez de empilhar — assim "conectar de novo"
+  // já funciona como desconectar + reconectar.
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      setEdges((eds) => {
+        const sourceNode = nodes.find((n) => n.id === connection.source);
+        const isBranchHandle = sourceNode?.type === "menu" || sourceNode?.type === "condition";
+        const withoutConflicting = eds.filter((e) => {
+          if (e.source !== connection.source) return true;
+          if (isBranchHandle) return (e.sourceHandle ?? null) !== (connection.sourceHandle ?? null);
+          return false;
+        });
+        return addEdge(connection, withoutConflicting);
+      });
+    },
+    [setEdges, nodes]
+  );
+  const isValidConnection = useCallback((conn: Connection | Edge) => conn.source !== conn.target, []);
+
+  const edgeReconnectOk = useRef(true);
+  const onReconnectStart = useCallback(() => {
+    edgeReconnectOk.current = false;
+  }, []);
+  const onReconnect: OnReconnect = useCallback(
+    (oldEdge, newConnection) => {
+      edgeReconnectOk.current = true;
+      setEdges((eds) => reconnectEdge(oldEdge, newConnection, eds));
+    },
+    [setEdges]
+  );
+  const onReconnectEnd = useCallback((_: unknown, edge: Edge) => {
+    if (!edgeReconnectOk.current) {
+      setEdges((eds) => eds.filter((e) => e.id !== edge.id));
+    }
+    edgeReconnectOk.current = true;
+  }, [setEdges]);
 
   function handleAddNode(type: FlowNodeType, defaultData: Record<string, unknown>) {
     const id = newId();
@@ -150,7 +204,13 @@ function FlowEditorInner({
         position: n.position,
         data: n.data as FlowGraph["nodes"][number]["data"],
       })),
-      edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? null })),
+      edges: edges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        sourceHandle: e.sourceHandle ?? null,
+        targetHandle: e.targetHandle ?? null,
+      })),
     };
   }
 
@@ -211,6 +271,13 @@ function FlowEditorInner({
         <Badge variant={status === "PUBLISHED" ? "default" : "secondary"}>{STATUS_LABEL[status] ?? status}</Badge>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
         <div className="ml-auto flex items-center gap-2">
+          <Link
+            href={`/app/${tenantSlug}/modulos/whatsapp/fluxos/${connectionId}/${flowId}/respostas`}
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <ClipboardList className="size-4" />
+            Respostas
+          </Link>
           <Button variant="outline" size="sm" disabled={saving} onClick={handleSave}>
             {saving ? "Salvando..." : "Salvar rascunho"}
           </Button>
@@ -280,6 +347,11 @@ function FlowEditorInner({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          isValidConnection={isValidConnection}
+          onReconnectStart={onReconnectStart}
+          onReconnect={onReconnect}
+          onReconnectEnd={onReconnectEnd}
+          connectionMode={ConnectionMode.Loose}
           nodeTypes={FLOW_NODE_TYPES}
           onNodeClick={(_, node) => setSelectedNodeId(node.id)}
           onPaneClick={() => setSelectedNodeId(null)}

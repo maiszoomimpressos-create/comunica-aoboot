@@ -450,6 +450,7 @@ model ChannelConnection {
   relaySessions            RelaySession[]
   flows                    Flow[]
   flowSessions             FlowSession[]
+  formSubmissions          FormSubmission[]
   knowledgeEntries         KnowledgeEntry[]
   knowledgeCorrections     KnowledgeCorrection[]
 
@@ -1011,7 +1012,8 @@ model Flow {
   connectionId String
   connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
-  sessions FlowSession[]
+  sessions    FlowSession[]
+  submissions FormSubmission[]
 
   @@index([connectionId, status])
   @@map("flow")
@@ -1044,6 +1046,31 @@ model FlowSession {
 
   @@unique([connectionId, contactPhone])
   @@map("flow_session")
+}
+
+// Resposta completa de um nó `form` dentro de um Fluxo — gravada quando o
+// contato confirma ("ENVIAR") depois de preencher todos os campos (ver
+// flow-engine.service.ts). `answers` guarda {variable: valor} de cada campo
+// do nó; `pdfUrl` fica nulo se a geração/upload do PDF falhar (não trava o
+// atendimento por isso, ver form-submission.service.ts), e pode ser
+// preenchido depois por um reprocessamento manual se precisar.
+model FormSubmission {
+  id           String   @id @default(cuid())
+  title        String
+  contactPhone String
+  answers      Json
+  pdfUrl       String?
+  createdAt    DateTime @default(now())
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  flowId String
+  flow   Flow   @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  nodeId String
+
+  @@index([connectionId, flowId])
+  @@map("form_submission")
 }
 
 enum KnowledgeEntrySource {

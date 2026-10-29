@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { FlowNode } from "@/lib/flow/types";
+import type { FlowNode, FormFieldDef, FormFieldType } from "@/lib/flow/types";
 
 const TYPE_LABEL: Record<string, string> = {
   start: "Início",
@@ -14,8 +14,22 @@ const TYPE_LABEL: Record<string, string> = {
   menu: "Menu de opções",
   question: "Pergunta",
   condition: "Condição",
+  form: "Formulário",
   end: "Fim",
 };
+
+const FIELD_TYPE_LABEL: Record<FormFieldType, string> = {
+  text: "Texto",
+  phone: "Telefone",
+  cpf: "CPF",
+  date: "Data",
+  email: "E-mail",
+  number: "Número",
+};
+
+function newFieldId() {
+  return crypto.randomUUID().slice(0, 8);
+}
 
 /** Painel lateral de propriedades do nó selecionado — cada tipo de nó
  * expõe um formulário diferente, editando `node.data` in-place (o chamador
@@ -168,6 +182,99 @@ export function FlowNodePanel({
             </div>
             <p className="text-xs text-muted-foreground">
               Conecte as saídas "Verdadeiro" e "Falso" do nó às próximas etapas.
+            </p>
+          </>
+        )}
+
+        {node.type === "form" && (
+          <>
+            <div className="space-y-1.5">
+              <Label>Título do formulário</Label>
+              <Input
+                value={data.title ?? ""}
+                onChange={(e) => onChange({ ...data, title: e.target.value })}
+                placeholder="Ex: Currículo"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Campos (um por vez, nesta ordem)</Label>
+              <div className="space-y-3">
+                {(data.fields ?? []).map((field, i) => (
+                  <div key={field.id} className="space-y-1.5 rounded border border-border bg-muted/40 p-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">Campo {i + 1}</span>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="Remover campo"
+                        onClick={() => {
+                          const next = (data.fields ?? []).filter((f) => f.id !== field.id);
+                          onChange({ ...data, fields: next });
+                        }}
+                      >
+                        <X className="size-3.5" />
+                      </Button>
+                    </div>
+                    <Input
+                      value={field.label}
+                      placeholder="Pergunta — ex: Qual seu telefone?"
+                      onChange={(e) => {
+                        const next = [...(data.fields ?? [])];
+                        next[i] = { ...field, label: e.target.value };
+                        onChange({ ...data, fields: next });
+                      }}
+                    />
+                    <div className="flex items-center gap-1.5">
+                      <Input
+                        className="flex-1"
+                        value={field.variable}
+                        placeholder="nome da variável (ex: telefone)"
+                        onChange={(e) => {
+                          const next = [...(data.fields ?? [])];
+                          next[i] = { ...field, variable: e.target.value };
+                          onChange({ ...data, fields: next });
+                        }}
+                      />
+                      <Select
+                        value={field.fieldType}
+                        onValueChange={(v) => {
+                          const next = [...(data.fields ?? [])];
+                          next[i] = { ...field, fieldType: v as FormFieldType };
+                          onChange({ ...data, fields: next });
+                        }}
+                      >
+                        <SelectTrigger className="w-28 shrink-0">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(FIELD_TYPE_LABEL).map(([value, label]) => (
+                            <SelectItem key={value} value={value}>
+                              {label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const next: FormFieldDef[] = [
+                    ...(data.fields ?? []),
+                    { id: newFieldId(), label: "", variable: "", fieldType: "text" },
+                  ];
+                  onChange({ ...data, fields: next });
+                }}
+              >
+                <Plus className="size-3.5" />
+                Adicionar campo
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              O bot pergunta um campo por vez, valida o formato e mostra um resumo com confirmação (ENVIAR/CORRIGIR) no final.
             </p>
           </>
         )}

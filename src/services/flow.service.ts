@@ -6,6 +6,7 @@ import {
   deleteFlowRecord,
   countActiveFlowSessionsForFlow,
 } from "@/repositories/flow.repository";
+import { listFormSubmissionsForFlow } from "@/repositories/form-submission.repository";
 import { isFlowGraph, type FlowGraph } from "@/lib/flow/types";
 import { ValidationError, NotFoundError, ConflictError } from "@/lib/server/errors";
 import { prisma } from "@/lib/db/prisma";
@@ -55,6 +56,19 @@ function validatePublishableGraph(graph: FlowGraph) {
         throw new ValidationError(`O menu "${node.data?.text ?? node.id}" tem opção sem conexão de saída.`);
       }
     }
+    if (node.type === "form") {
+      const fields = node.data?.fields ?? [];
+      if (fields.length === 0) {
+        throw new ValidationError(`O formulário "${node.data?.title ?? node.id}" precisa de pelo menos um campo.`);
+      }
+      for (const field of fields) {
+        if (!field.label?.trim() || !field.variable?.trim()) {
+          throw new ValidationError(
+            `O formulário "${node.data?.title ?? node.id}" tem um campo sem pergunta ou sem nome de variável.`
+          );
+        }
+      }
+    }
   }
 }
 
@@ -90,6 +104,14 @@ export async function unpublishFlow(tenantId: string, flowId: string) {
   const existing = await findFlowForTenant(tenantId, flowId);
   if (!existing) throw new NotFoundError("Fluxo não encontrado.");
   return prisma.flow.update({ where: { id: flowId }, data: { status: "ARCHIVED" } });
+}
+
+/** Respostas de nós `form` deste fluxo — checa posse via getFlow antes de
+ * listar, mesma convenção de todo outro acesso a dado de um fluxo por
+ * tenantId/flowId nesta service. */
+export async function listFormSubmissions(tenantId: string, flowId: string) {
+  await getFlow(tenantId, flowId);
+  return listFormSubmissionsForFlow(flowId);
 }
 
 export async function deleteFlow(tenantId: string, flowId: string) {
