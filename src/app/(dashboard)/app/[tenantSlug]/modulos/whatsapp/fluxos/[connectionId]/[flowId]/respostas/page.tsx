@@ -5,6 +5,7 @@ import { ArrowLeft, Download } from "lucide-react";
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
 import { getConnectionSummary } from "@/repositories/channel-connection.repository";
+import { assertConnectionAccessOrNotFound } from "@/lib/rbac/connection-scope";
 import { getFlow, listFormSubmissions } from "@/services/flow.service";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ export default async function FlowRespostasPage({
 
   const connection = await getConnectionSummary(ctx.tenantId, connectionId);
   if (!connection) notFound();
+  assertConnectionAccessOrNotFound(ctx, connectionId);
 
   const flow = await getFlow(ctx.tenantId, flowId).catch(() => null);
   if (!flow || flow.connectionId !== connectionId) notFound();

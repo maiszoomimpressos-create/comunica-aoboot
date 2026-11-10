@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { defineTenantAction } from "@/lib/server/actions/define-tenant-action";
 import { createCampaign } from "@/services/campaign.service";
+import { assertConnectionAccess } from "@/lib/rbac/connection-scope";
 
 const schema = z.object({
   connectionId: z.string().min(1),
@@ -24,6 +25,7 @@ export const createCampaignAction = defineTenantAction(
   "campaigns.manage",
   async (ctx, input: z.infer<typeof schema>) => {
     const parsed = schema.parse(input);
+    assertConnectionAccess(ctx, parsed.connectionId);
     return createCampaign(ctx.tenantId, parsed);
   }
 );

@@ -88,6 +88,10 @@ export async function publishFlow(tenantId: string, flowId: string) {
     // não uma coluna própria — isto só torna a exclusividade explícita: uma vez
     // publicado, o fluxo assume e a IA genérica desta conexão é desligada, em vez
     // de ficar silenciosamente inalcançável enquanto o toggle ainda mostra "ligado".
+    // Exceção de propósito: um nó `ai` dentro do fluxo entrega a conversa pra essa
+    // mesma IA de novo, ignorando este `enabled=false` (ver bypassEnabledCheck em
+    // handleInboundMessage/tryHandleFlowMessage) — é o único jeito de um fluxo
+    // deixar o cliente escolher entre "falar com atendente" e algo determinístico.
     await tx.botConfig.updateMany({ where: { connectionId: existing.connectionId }, data: { enabled: false } });
     return tx.flow.update({
       where: { id: flowId },

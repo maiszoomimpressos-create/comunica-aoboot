@@ -16,13 +16,24 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { WHATSAPP_SERVICES } from "@/config/whatsapp-services";
+import { NOTIFICATION_TYPES } from "@/config/whatsapp-notification-types";
 import { updateEnabledServicesAction } from "@/actions/whatsapp/update-enabled-services";
+
+// Serviços que têm tipos próprios no catálogo de notificação (hoje:
+// purchase_confirmation, verification_code) agora são controlados pela
+// página "Funções" (NotificationTypesPanel), por tipo — não sobra checkbox
+// aqui que não gatekeeper mais nada. Só sobra o que não tem "tipos"
+// (balance_alert).
+const visibleServices = WHATSAPP_SERVICES.filter(
+  (s) => !NOTIFICATION_TYPES.some((t) => t.serviceKey === s.key)
+);
 
 /**
  * Tenant-facing: scopes this connection's API key to only the checked
  * services (config/whatsapp-services.ts) — an external caller with a valid
  * key but hitting an unchecked service's endpoint gets a 403 (see
- * sendPurchaseConfirmation / sendBalanceAlert). Separate from
+ * sendBalanceAlert; purchase_confirmation/verification_code are gated by
+ * type now, see the "Funções" page / NotificationTypesPanel). Separate from
  * EditConnectionDialog — this controls what the key can *do*, not the
  * connection's own name/phone.
  */
@@ -82,7 +93,7 @@ export function EnabledServicesDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
-          {WHATSAPP_SERVICES.map((service) => (
+          {visibleServices.map((service) => (
             <Label key={service.key} className="flex items-start gap-2 text-sm font-normal">
               <Checkbox
                 className="mt-0.5"

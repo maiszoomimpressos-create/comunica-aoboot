@@ -3,6 +3,7 @@ import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
 import { getTenantById } from "@/repositories/tenant.repository";
 import { EmpresaForm } from "@/components/dashboard/empresa/empresa-form";
+import { DeleteTenantButton } from "@/components/dashboard/empresa/delete-tenant-button";
 import { Badge } from "@/components/ui/badge";
 
 export const metadata: Metadata = { title: "Minha Empresa" };
@@ -48,6 +49,19 @@ export default async function EmpresaPage({
           messageBusinessName: tenant.messageBusinessName ?? "",
         }}
       />
+
+      {ctx.roleKey === "owner" && (
+        <div className="max-w-md space-y-3 rounded-xl border border-destructive/30 p-4">
+          <div>
+            <h2 className="font-medium text-destructive">Zona de perigo</h2>
+            <p className="text-sm text-muted-foreground">
+              Excluir a empresa é definitivo: apaga conexões, campanhas, contatos, papéis e
+              membros, sem volta.
+            </p>
+          </div>
+          <DeleteTenantButton tenantSlug={tenantSlug} slug={tenant.slug} />
+        </div>
+      )}
     </div>
   );
 }

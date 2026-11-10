@@ -1,4 +1,5 @@
-import { ValidationError } from "@/lib/server/errors";
+import type { SegmentoNiche } from "@/generated/prisma/client";
+import { resolveGreetingFirstName, type GreetingNameField } from "@/lib/notifications/greeting-name";
 
 /**
  * Catalog of WhatsApp notification types the purchase-confirmation API
@@ -36,6 +37,10 @@ export interface BuildMessageInput {
 export interface NotificationTypeDef {
   key: string;
   label: string;
+  /** Explicação curta do que a mensagem faz, em português simples — exibida
+   * no painel de "Funções" (NotificationTypesPanel) pra ajudar o tenant a
+   * decidir se marca esse tipo antes de precisar ler o código. */
+  description: string;
   requiresQr: boolean;
   requiredDetailKeys: string[];
   /** Which WHATSAPP_SERVICES key gates this type (see whatsapp-services.ts)
@@ -44,6 +49,13 @@ export interface NotificationTypeDef {
    * purchase_confirmation's, for types that aren't actually about a
    * purchase (e.g. codigo_verificacao). */
   serviceKey: string;
+  /** Which Segmento.niche(s) (config/segmento-niches.ts) this type is
+   * specific to — `null` means cross-niche/generic, always shown regardless
+   * of which nicho(s) a connection's Segmentos declare. Used only to filter
+   * what NotificationTypesPanel shows per connection (getNotificationTypesForNiches
+   * below); never enforced server-side — a tenant can still enable any type
+   * on any connection, this is just a UI narrowing to cut noise. */
+  niches: SegmentoNiche[] | null;
   buildMessage(input: BuildMessageInput): string;
 }
 
@@ -53,8 +65,52 @@ function bold(text: string): string {
   return `*${text}*`;
 }
 
-function greet(whatsappName: string | null): string {
+/** Exportada pra ser reaproveitada ao montar mensagens de funções
+ * personalizadas (ver sendPurchaseConfirmation em whatsapp-connection.service.ts)
+ * — mesma saudação dos tipos fixos deste catálogo, pro tom ficar consistente. */
+export function greet(whatsappName: string | null): string {
   return whatsappName ? `Olá, ${bold(whatsappName)}!` : "Olá!";
+}
+
+export type GreetingStyle = "FIXO" | "HORARIO";
+export type GreetingNameSource = "PERFIL_WHATSAPP" | "CADASTRO";
+
+/** Monta a saudação pra um envio — usada tanto pelos tipos fixos do
+ * catálogo (ex: corrida_concluida) quanto pelo render de funções
+ * personalizadas (ver sendPurchaseConfirmation em
+ * whatsapp-connection.service.ts). A saudação usa só o primeiro nome,
+ * capitalizado, nesta ordem (independente de `nameSource`, que continua
+ * salvo no tipo por compatibilidade): 1) nome enviado pelo sistema
+ * cliente (`recipientName` ou um campo como `nome_passageiro`); 2) nome
+ * do perfil no WhatsApp, se houver; 3) sem nome válido, só "Olá!" /
+ * "Bom dia!". `HORARIO` calcula o período em America/Sao_Paulo. */
+export function buildGreeting(params: {
+  style: GreetingStyle;
+  nameSource: GreetingNameSource;
+  whatsappName: string | null;
+  recipientName: string;
+  details?: Record<string, string>;
+  fields?: GreetingNameField[];
+  whatsappNameOnly?: boolean;
+}): string {
+  void params.nameSource;
+  const name = resolveGreetingFirstName({
+    recipientName: params.recipientName,
+    whatsappName: params.whatsappName,
+    details: params.details,
+    fields: params.fields,
+    whatsappNameOnly: params.whatsappNameOnly,
+  });
+  if (params.style === "FIXO") return name ? `Olá, ${bold(name)}!` : "Olá!";
+  const hour = Number(
+    new Intl.DateTimeFormat("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+      hour: "2-digit",
+      hourCycle: "h23",
+    }).format(new Date())
+  );
+  const period = hour < 12 ? "Bom dia" : hour < 18 ? "Boa tarde" : "Boa noite";
+  return name ? `${period}, ${bold(name)}!` : `${period}!`;
 }
 
 /** `isoDate` is UTC (ISO 8601, e.g. "2026-12-15T22:00:00.000Z") — converted
@@ -97,15 +153,18 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   {
     key: "compra_confirmada",
     label: "Compra confirmada",
+    description: "Confirma que uma compra foi aprovada — mensagem simples, sem QR code nem detalhes extras.",
     requiresQr: false,
     requiredDetailKeys: [],
     serviceKey: "purchase_confirmation",
+    niches: null,
     buildMessage: ({ whatsappName, recipientName, businessName }) =>
       `${greet(whatsappName)} O pedido comprado em ${businessName}, por ${bold(recipientName)}, foi aprovado com sucesso.`,
   },
   {
     key: "ingresso_emitido",
     label: "Ingresso emitido",
+    description: "Manda o ingresso com QR code quando a compra é aprovada, com evento, tipo do ingresso, data e local.",
     requiresQr: true,
     // Contrato definido pelo lado da Tipo7 (em produção desde 08/08/2026):
     // `nome_evento` e `ingresso` (tipo do ingresso — Pista/VIP/etc, sempre
@@ -116,6 +175,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     // formatLocation).
     requiredDetailKeys: ["nome_evento", "ingresso"],
     serviceKey: "purchase_confirmation",
+    niches: ["EVENTOS_INGRESSOS"],
     buildMessage: ({ whatsappName, recipientName, businessName, details }) => {
       const lines = [
         greet(whatsappName),
@@ -133,6 +193,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   {
     key: "estacionamento_emitido",
     label: "Comprovante de estacionamento emitido",
+    description: "Manda o comprovante de estacionamento com QR code, dados do veículo e data/horário.",
     requiresQr: true,
     // `local`: nome/endereço do estacionamento. `placa`/`cor`/`modelo`: do
     // veículo. `data`/`horario`: mesmos nomes de ingresso_emitido e
@@ -141,12 +202,14 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     // portão) — mesma estrutura de dados nos três, só muda quem dispara.
     requiredDetailKeys: ["local", "placa", "cor", "modelo", "data", "horario"],
     serviceKey: "purchase_confirmation",
+    niches: ["ESTACIONAMENTO"],
     buildMessage: ({ whatsappName, recipientName, details }) =>
       `${greet(whatsappName)}\n\nSeu comprovante de estacionamento em ${bold(details.local)} foi aprovado com sucesso.\n\n🚗 ${details.modelo} - ${details.cor} - Placa ${details.placa}\n📅 ${details.data} às ${details.horario}\n\nComprado por: ${bold(recipientName)}`,
   },
   {
     key: "estacionamento_liberado",
     label: "Entrada no estacionamento liberada (ticket de saída)",
+    description: "Avisa que o carro entrou no estacionamento e manda um QR code novo — é o que libera a saída depois.",
     requiresQr: true,
     // Disparado no momento em que o carro efetivamente entra — seja depois
     // de validar um estacionamento_emitido comprado antes, seja por
@@ -155,30 +218,37 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     // não a entrada.
     requiredDetailKeys: ["local", "placa", "cor", "modelo", "horario"],
     serviceKey: "purchase_confirmation",
+    niches: ["ESTACIONAMENTO"],
     buildMessage: ({ whatsappName, details }) =>
       `${greet(whatsappName)}\n\nSeu veículo ${bold(`${details.modelo} - ${details.cor} - Placa ${details.placa}`)} entrou no estacionamento ${bold(details.local)} às ${details.horario}.\n\nGuarde este QR code — você vai precisar apresentá-lo na saída para liberar o veículo.`,
   },
   {
     key: "lista_espera",
     label: "Entrada na lista de espera",
+    description: "Avisa que a pessoa entrou na lista de espera e que você chama assim que abrir vaga.",
     requiresQr: false,
     requiredDetailKeys: [],
     serviceKey: "purchase_confirmation",
+    niches: null,
     buildMessage: ({ whatsappName, businessName }) =>
       `${greet(whatsappName)} Você entrou na lista de espera em ${businessName}. Assim que houver uma vaga, avisamos por aqui.`,
   },
   {
     key: "agendamento_confirmado",
     label: "Agendamento confirmado",
+    description: "Confirma um agendamento, com a data e o horário marcados.",
     requiresQr: false,
     requiredDetailKeys: ["data", "horario"],
     serviceKey: "purchase_confirmation",
+    niches: null,
     buildMessage: ({ whatsappName, businessName, details }) =>
       `${greet(whatsappName)} Seu agendamento em ${businessName} foi confirmado para ${details.data} às ${details.horario}.`,
   },
   {
     key: "notificacao",
     label: "Notificação genérica (qualquer confirmação de ação)",
+    description:
+      "Pra confirmações que não têm um tipo próprio (saldo debitado, cadastro concluído, etc.) — você manda a frase pronta e a gente só embrulha com saudação e nome do negócio.",
     // The catch-all entry point for niches we haven't (and may never)
     // special-case: saldo debitado, cadastro concluído, movimentação
     // registrada, agendamento marcado, etc. Instead of one curated type per
@@ -193,12 +263,14 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     requiresQr: false,
     requiredDetailKeys: ["evento"],
     serviceKey: "purchase_confirmation",
+    niches: null,
     buildMessage: ({ whatsappName, businessName, details }) =>
       [greet(whatsappName), "", details.evento, "", businessName].join("\n"),
   },
   {
     key: "apk_disponivel",
     label: "Link de APK disponível",
+    description: "Manda o link de download de uma nova versão do app (ex: app do motorista).",
     requiresQr: false,
     // Primeiro tipo pensado pra um caller fora do contexto de compra/ingresso
     // (MAI Drive — mobility-app, 28/08/2026): manda o link de download de um
@@ -208,6 +280,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     // disponível", não uma compra feita numa empresa.
     requiredDetailKeys: ["link"],
     serviceKey: "purchase_confirmation",
+    niches: ["MOBILIDADE_CORRIDAS"],
     buildMessage: ({ whatsappName, details }) => {
       const lines = [greet(whatsappName), "", "Uma nova versão do app está disponível para download:"];
       if (details.versao?.trim()) lines.push(`Versão: ${bold(details.versao.trim())}`);
@@ -218,30 +291,36 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   {
     key: "corrida_concluida",
     label: "Corrida concluída (resumo pro passageiro)",
+    description: "Manda um resumo da corrida (horário, distância, tarifa, motorista, valor e forma de pagamento) quando ela termina.",
     requiresQr: false,
     // Disparado pelo app de corridas (MAI Drive) ao finalizar a viagem —
     // mesmo número do passageiro já capturado no início da corrida.
-    // `distancia` e `valor_total` sempre vêm preenchidos; `duracao` é
-    // opcional (mesmo tratamento de opcional que formatLocation/
-    // formatEventDateTime) e some da mensagem quando vier "".
-    requiredDetailKeys: ["distancia", "valor_total"],
+    // `link_tarifas` é opcional (mesmo tratamento de opcional que
+    // formatLocation/formatEventDateTime): a página de tarifas da tipo7
+    // ainda está em desenvolvimento, então a linha simplesmente some
+    // enquanto o campo não for enviado, sem quebrar a notificação.
+    requiredDetailKeys: ["horario", "distancia", "tarifa", "motorista", "valor_total", "forma_pagamento"],
     serviceKey: "purchase_confirmation",
-    buildMessage: ({ whatsappName, businessName, details }) => {
+    niches: ["MOBILIDADE_CORRIDAS"],
+    buildMessage: ({ whatsappName, recipientName, businessName, details }) => {
       const lines = [
-        greet(whatsappName),
+        buildGreeting({ style: "HORARIO", nameSource: "CADASTRO", whatsappName, recipientName }),
         "",
-        `Sua corrida foi concluída. Obrigado por escolher a ${bold(businessName)}!`,
+        `Sua corrida com a ${bold(businessName)} foi concluída! Agradecemos por ter escolhido a nossa empresa.`,
         "",
-        `📍 Distância: ${details.distancia}`,
+        `🕒 Horário: ${details.horario}`,
+        `📍 Distância percorrida: ${details.distancia}`,
+        `💲 Tarifa aplicada: ${details.tarifa}`,
       ];
-      if (details.duracao?.trim()) lines.push(`⏱️ Duração: ${details.duracao}`);
-      lines.push(`💰 Valor total: ${bold(details.valor_total)}`);
+      if (details.link_tarifas?.trim()) lines.push(`🔗 Entenda nossas tarifas: ${details.link_tarifas}`);
+      lines.push("", `🚗 Motorista: ${details.motorista}`, `💰 Valor da corrida: ${bold(details.valor_total)} (${details.forma_pagamento})`);
       return lines.join("\n");
     },
   },
   {
     key: "codigo_verificacao",
     label: "Código de verificação (2FA)",
+    description: "Manda um código de acesso temporário — segundo fator de login num painel ou terminal.",
     // Segundo fator de acesso a um painel/menu administrativo (ex: terminal
     // físico Tipo7 GPOS780) — não é uma confirmação de compra, por isso vive
     // no próprio serviço "verification_code" em vez de herdar
@@ -249,24 +328,32 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     requiresQr: false,
     requiredDetailKeys: ["codigo"],
     serviceKey: "verification_code",
+    niches: ["GENERICO_2FA"],
     buildMessage: ({ details }) =>
       `Seu código de acesso ao terminal Tipo7 é ${bold(details.codigo)}. Válido por 5 minutos, não compartilhe com ninguém.`,
   },
 ];
 
-/** Resolves a type key to its definition — `undefined` falls back to the
- * generic default (compra_confirmada), matching the API's pre-catalog
- * behavior for callers that don't send `type` at all. Throws for an
- * unknown key rather than silently falling back, so a typo in the
- * caller's integration surfaces immediately instead of sending the wrong
- * message. */
-export function getNotificationType(key: string | undefined): NotificationTypeDef {
-  const resolved = key?.trim() || DEFAULT_NOTIFICATION_TYPE;
-  const found = NOTIFICATION_TYPES.find((t) => t.key === resolved);
-  if (!found) {
-    throw new ValidationError(
-      `Tipo de notificação inválido: "${resolved}". Tipos disponíveis: ${NOTIFICATION_TYPES.map((t) => t.key).join(", ")}.`
-    );
-  }
-  return found;
+/** Used to validate the list a tenant sends when toggling which types a
+ * connection can disparar — see updateConnectionEnabledNotificationTypes in
+ * whatsapp-connection.service.ts. */
+export function isValidNotificationTypeKey(key: string): boolean {
+  return NOTIFICATION_TYPES.some((t) => t.key === key);
+}
+
+/** Narrows the catalog to what's relevant for a connection, based on the
+ * niche(s) declared by its Segmentos (repositories/segmento.repository.ts).
+ * `connectionNiches` empty (connection has no Segmento yet) returns the
+ * full catalog unfiltered — a connection nobody has tagged with a niche
+ * shouldn't have functionality hidden from it. Generic types (`niches:
+ * null`) always pass through regardless. Pure UI narrowing (see the note on
+ * NotificationTypeDef.niches) — never used for the actual send-time check. */
+export function getNotificationTypesForNiches(
+  connectionNiches: SegmentoNiche[]
+): NotificationTypeDef[] {
+  if (connectionNiches.length === 0) return NOTIFICATION_TYPES;
+  const nicheSet = new Set(connectionNiches);
+  return NOTIFICATION_TYPES.filter(
+    (type) => type.niches === null || type.niches.some((n) => nicheSet.has(n))
+  );
 }

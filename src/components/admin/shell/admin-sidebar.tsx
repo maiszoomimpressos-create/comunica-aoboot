@@ -2,17 +2,19 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Building2, Users, CreditCard, LayoutGrid, MessageCircle } from "lucide-react";
+import { LayoutDashboard, Building2, Users, CreditCard, LayoutGrid, MessageCircle, DollarSign, FlaskConical } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { siteConfig } from "@/config/site";
 
 const ITEMS = [
   { label: "Visão geral", href: "/admin", icon: LayoutDashboard },
+  { label: "Testar", href: "/admin/testar", icon: FlaskConical },
   { label: "Empresas", href: "/admin/empresas", icon: Building2 },
   { label: "Usuários", href: "/admin/usuarios", icon: Users },
   { label: "Planos", href: "/admin/planos", icon: CreditCard },
   { label: "Módulos", href: "/admin/modulos", icon: LayoutGrid },
   { label: "WhatsApp", href: "/admin/whatsapp", icon: MessageCircle },
+  { label: "Gastos de IA", href: "/admin/ia", icon: DollarSign },
 ];
 
 export function AdminSidebar({ pendingWhatsappRequests }: { pendingWhatsappRequests: number }) {

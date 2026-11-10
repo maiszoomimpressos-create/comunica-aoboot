@@ -23,6 +23,7 @@ import { updateWhatsappConnectionAction } from "@/actions/whatsapp/update-connec
 const formSchema = z.object({
   connectionName: z.string().min(1, "Informe o nome da conexão."),
   phoneNumber: z.string().min(1, "Informe o número do WhatsApp."),
+  businessName: z.string().max(80, "Máximo de 80 caracteres.").optional().or(z.literal("")),
 });
 type FormValues = z.infer<typeof formSchema>;
 
@@ -35,7 +36,7 @@ export function EditConnectionDialog({
 }: {
   tenantSlug: string;
   connectionId: string;
-  defaultValues: { connectionName: string; phoneNumber: string };
+  defaultValues: { connectionName: string; phoneNumber: string; businessName: string };
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -95,6 +96,15 @@ export function EditConnectionDialog({
                 Só números, sem espaço, traço ou parênteses: código do país + DDD + número.
               </FieldDescription>
               <FieldError errors={[errors.phoneNumber]} />
+            </Field>
+            <Field data-invalid={!!errors.businessName}>
+              <FieldLabel htmlFor="businessName">Nome do negócio nas mensagens (opcional)</FieldLabel>
+              <Input id="businessName" {...register("businessName")} />
+              <FieldDescription>
+                Sobrepõe o nome configurado em Minha Empresa — use quando este número representa um
+                negócio diferente do resto da conta.
+              </FieldDescription>
+              <FieldError errors={[errors.businessName]} />
             </Field>
             {serverError && (
               <p role="alert" className="text-sm text-destructive">

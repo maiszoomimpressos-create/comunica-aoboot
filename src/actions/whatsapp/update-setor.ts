@@ -2,7 +2,8 @@
 
 import { z } from "zod";
 import { defineTenantAction } from "@/lib/server/actions/define-tenant-action";
-import { updateSetor } from "@/services/setor.service";
+import { updateSetor, getSetorConnectionId } from "@/services/setor.service";
+import { assertConnectionAccess } from "@/lib/rbac/connection-scope";
 
 const schema = z.object({
   setorId: z.string().min(1),
@@ -16,6 +17,7 @@ const schema = z.object({
  * delete-all-then-recreate em vez de diff. */
 export const updateSetorAction = defineTenantAction("whatsapp.manage", async (ctx, input: z.infer<typeof schema>) => {
   const parsed = schema.parse(input);
+  assertConnectionAccess(ctx, await getSetorConnectionId(ctx.tenantId, parsed.setorId));
   return updateSetor(ctx.tenantId, parsed.setorId, {
     name: parsed.name,
     description: parsed.description ?? null,

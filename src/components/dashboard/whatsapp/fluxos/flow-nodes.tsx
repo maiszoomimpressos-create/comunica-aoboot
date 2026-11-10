@@ -1,7 +1,7 @@
 "use client";
 
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { Play, MessageSquare, ListChecks, CircleHelp, GitBranch, Square, FileText } from "lucide-react";
+import { Play, MessageSquare, ListChecks, CircleHelp, GitBranch, Square, FileText, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FlowNode as FlowNodeData } from "@/lib/flow/types";
 
@@ -15,6 +15,7 @@ const BORDER_ACCENT: Record<string, string> = {
   condition: "border-l-warning",
   form: "border-l-blue-500",
   end: "border-l-muted-foreground",
+  ai: "border-l-violet-500",
 };
 
 const ICON_ACCENT: Record<string, string> = {
@@ -25,6 +26,7 @@ const ICON_ACCENT: Record<string, string> = {
   condition: "text-warning",
   form: "text-blue-500",
   end: "text-muted-foreground",
+  ai: "text-violet-500",
 };
 
 function NodeShell({
@@ -191,6 +193,18 @@ export function FormNode({ data, selected }: RFNodeProps) {
   );
 }
 
+export function AiNode({ selected }: RFNodeProps) {
+  return (
+    <NodeShell type="ai" icon={<Bot className="size-3.5" />} title="IA / Atendente" selected={selected}>
+      Entrega a conversa pro atendente de IA
+      <Handle type="target" position={Position.Top} />
+      <Handle type="target" position={Position.Left} id="left" />
+      <Handle type="target" position={Position.Right} id="right" />
+      <Handle type="target" position={Position.Bottom} id="bottom" />
+    </NodeShell>
+  );
+}
+
 export function EndNode({ data, selected }: RFNodeProps) {
   return (
     <NodeShell type="end" icon={<Square className="size-3.5" />} title="Fim" selected={selected}>
@@ -211,4 +225,5 @@ export const FLOW_NODE_TYPES = {
   condition: ConditionNode,
   form: FormNode,
   end: EndNode,
+  ai: AiNode,
 };

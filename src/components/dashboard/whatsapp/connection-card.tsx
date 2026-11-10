@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Trash2, RefreshCw, Send, Smartphone, Users } from "lucide-react";
+import { Trash2, RefreshCw, Send, Smartphone, Users, Bot } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,7 +25,6 @@ import { QrCodeSection } from "./qr-code-section";
 import { EditConnectionDialog } from "./edit-connection-dialog";
 import { BalanceAlertPhonesDialog } from "./balance-alert-phones-dialog";
 import { EnabledServicesDialog } from "./enabled-services-dialog";
-import { BotAttendantSection } from "./bot-attendant-section";
 import { retestWhatsappConnectionAction } from "@/actions/whatsapp/retest-connection";
 import { deleteWhatsappConnectionAction } from "@/actions/whatsapp/delete-connection";
 import type { ChannelConnectionSummary } from "@/repositories/channel-connection.repository";
@@ -41,12 +40,10 @@ export function ConnectionCard({
   tenantSlug,
   connection,
   canManage,
-  botVerticals,
 }: {
   tenantSlug: string;
   connection: ChannelConnectionSummary;
   canManage: boolean;
-  botVerticals: { id: string; key: string; label: string }[];
 }) {
   const router = useRouter();
   const [showSend, setShowSend] = useState(false);
@@ -131,6 +128,7 @@ export function ConnectionCard({
               defaultValues={{
                 connectionName: connection.connectionName,
                 phoneNumber: connection.phoneNumber,
+                businessName: connection.businessName ?? "",
               }}
             />
             {isFullyConnected && (
@@ -153,6 +151,17 @@ export function ConnectionCard({
               >
                 <Users className="size-4" />
                 Setores
+              </Button>
+            )}
+            {isFullyConnected && (
+              <Button
+                variant="outline"
+                size="sm"
+                nativeButton={false}
+                render={<Link href={`/app/${tenantSlug}/modulos/whatsapp/atendimento/${connection.id}/ia`} />}
+              >
+                <Bot className="size-4" />
+                Atendente de IA
               </Button>
             )}
             {isFullyConnected && (
@@ -233,17 +242,6 @@ export function ConnectionCard({
               apiKeyPrefix={connection.apiKeyPrefix}
               apiKeyCreatedAt={connection.apiKeyCreatedAt}
               apiKeyLastUsedAt={connection.apiKeyLastUsedAt}
-            />
-          )}
-
-          {isFullyConnected && (
-            <BotAttendantSection
-              tenantSlug={tenantSlug}
-              connectionId={connection.id}
-              defaultEnabled={connection.botConfig?.enabled ?? false}
-              defaultBusinessProfile={connection.botConfig?.businessProfile ?? null}
-              defaultVerticalId={connection.botConfig?.verticalId ?? null}
-              verticals={botVerticals}
             />
           )}
         </>

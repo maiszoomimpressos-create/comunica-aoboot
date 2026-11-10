@@ -11,9 +11,11 @@ import {
   listContactsNotInList,
   listContactsNotInListForTenant,
   upsertSyncedContacts,
+  findContactIdsByPhones,
   setContactOptOut,
   type ContactRow,
 } from "@/repositories/contact.repository";
+import { parseContactsCsv } from "@/lib/csv/parse-contacts-csv";
 import {
   listListsForConnection,
   listListsForTenant,
@@ -54,8 +56,8 @@ export interface SyncContactsResult {
 }
 
 /** Pulls every contact from the connected WhatsApp's own address book and
- * upserts them as `Contact` rows — the only supported source for now (see
- * campaigns module plan; manual add / CSV import are future work). Never
+ * upserts them as `Contact` rows (`source: "sync"`) — see
+ * importContactsFromCsv for the other supported source, CSV import. Never
  * touches `optedOut` on existing contacts (upsertSyncedContacts's own
  * contract) — a re-sync can never silently undo an opt-out.
  *
@@ -143,6 +145,24 @@ export async function setContactOptOutStatus(
   if (result.count === 0) throw new NotFoundError("Contato não encontrado.");
 }
 
+/** Resolve o connectionId dono deste contato (Contact.connectionId é
+ * obrigatório, ver schema.prisma) pra checagem de connection scope na
+ * camada de action antes de opt-out manual. */
+export async function getContactConnectionId(tenantId: string, contactId: string): Promise<string> {
+  const contact = await prisma.contact.findFirst({ where: { id: contactId, tenantId } });
+  if (!contact) throw new NotFoundError("Contato não encontrado.");
+  return contact.connectionId;
+}
+
+/** Resolve o connectionId de uma lista pra checagem de connection scope —
+ * null pra uma lista ASSEMBLED (nunca presa a um número só, visível ao
+ * tenant inteiro, ver schema.prisma e listEligibleContacts). */
+export async function getListConnectionId(tenantId: string, listId: string): Promise<string | null> {
+  const list = await getListSummary(tenantId, listId);
+  if (!list) throw new NotFoundError("Lista não encontrada.");
+  return list.connectionId;
+}
+
 // --- Listas ------------------------------------------------------------------
 
 export function getListsForConnection(tenantId: string, connectionId: string): Promise<ContactListSummary[]> {
@@ -160,6 +180,54 @@ export async function createAssembledContactList(tenantId: string, name: string)
   const trimmed = name.trim();
   if (!trimmed) throw new ValidationError("Informe um nome para a lista.");
   return createAssembledList(tenantId, trimmed);
+}
+
+export interface ImportCsvListResult {
+  listId: string;
+  imported: number;
+  skipped: number;
+}
+
+/** Importa uma lista a partir de um CSV (telefone + nome opcional) e monta
+ * uma lista ASSEMBLED nova só com os contatos importados. Os contatos em si
+ * ficam presos a `connectionId` (o Contact.connectionId do schema é
+ * obrigatório, mesmo não havendo sincronização real de um aparelho aqui) —
+ * por isso a importação acontece a partir da página de Campanhas de uma
+ * conexão específica, com `source: "import"` pra diferenciar de `"sync"`. */
+export async function importContactsFromCsv(
+  tenantId: string,
+  connectionId: string,
+  listName: string,
+  csvText: string
+): Promise<ImportCsvListResult> {
+  const trimmedName = listName.trim();
+  if (!trimmedName) throw new ValidationError("Informe um nome para a lista.");
+
+  const connection = await getConnectionSummary(tenantId, connectionId);
+  if (!connection) throw new NotFoundError("Conexão não encontrada.");
+
+  const { contacts, skipped } = parseContactsCsv(csvText);
+  if (contacts.length === 0) {
+    throw new ValidationError("Nenhum telefone válido encontrado no arquivo.");
+  }
+
+  await upsertSyncedContacts(
+    tenantId,
+    connectionId,
+    connection.phoneNumber,
+    contacts.map((c) => ({ phone: c.phone, name: c.name ?? undefined })),
+    "import"
+  );
+  const contactIds = await findContactIdsByPhones(
+    tenantId,
+    connectionId,
+    contacts.map((c) => c.phone)
+  );
+
+  const list = await createAssembledList(tenantId, trimmedName);
+  await addContactsToListRepo(tenantId, list.id, contactIds);
+
+  return { listId: list.id, imported: contactIds.length, skipped };
 }
 
 export async function renameContactList(tenantId: string, listId: string, name: string) {

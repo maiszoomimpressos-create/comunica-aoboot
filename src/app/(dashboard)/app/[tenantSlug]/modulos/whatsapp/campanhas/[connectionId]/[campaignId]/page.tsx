@@ -5,6 +5,7 @@ import { ArrowLeft } from "lucide-react";
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
 import { getCampaignDetail } from "@/services/campaign.service";
+import { assertConnectionAccessOrNotFound } from "@/lib/rbac/connection-scope";
 import { NotFoundError } from "@/lib/server/errors";
 import { Badge } from "@/components/ui/badge";
 import { StartCampaignDialog } from "@/components/dashboard/whatsapp/campaigns/start-campaign-dialog";
@@ -29,6 +30,7 @@ export default async function CampaignDetailPage({
   const { tenantSlug, connectionId, campaignId } = await params;
   const ctx = await getRequestContext(tenantSlug);
   requirePermission(ctx, "campaigns.view");
+  assertConnectionAccessOrNotFound(ctx, connectionId);
   const canManage = ctx.permissions.includes("campaigns.manage");
 
   const detail = await getCampaignDetail(ctx.tenantId, campaignId).catch((err) => {

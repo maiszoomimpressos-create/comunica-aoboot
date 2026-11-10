@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
 import { listRolesWithPermissions } from "@/repositories/role.repository";
+import { listConnectionsForTenant } from "@/repositories/channel-connection.repository";
+import { listSegmentosForTenant } from "@/repositories/segmento.repository";
 import { RoleManager } from "@/components/dashboard/papeis/role-manager";
 
 export const metadata: Metadata = { title: "Papéis" };
@@ -15,7 +17,11 @@ export default async function PapeisPage({
   const ctx = await getRequestContext(tenantSlug);
   requirePermission(ctx, "roles.view");
 
-  const roles = await listRolesWithPermissions(ctx.tenantId);
+  const [roles, connections, segmentos] = await Promise.all([
+    listRolesWithPermissions(ctx.tenantId),
+    listConnectionsForTenant(ctx.tenantId, "WHATSAPP"),
+    listSegmentosForTenant(ctx.tenantId),
+  ]);
   const canManage = ctx.permissions.includes("roles.manage");
 
   return (
@@ -27,7 +33,17 @@ export default async function PapeisPage({
           exato de permissões que precisar.
         </p>
       </div>
-      <RoleManager tenantSlug={tenantSlug} roles={roles} canManage={canManage} />
+      <RoleManager
+        tenantSlug={tenantSlug}
+        roles={roles}
+        canManage={canManage}
+        connections={connections.map((c) => ({
+          id: c.id,
+          connectionName: c.connectionName,
+          phoneNumber: c.phoneNumber,
+        }))}
+        segmentos={segmentos}
+      />
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { ArrowLeft, Bot, Users2, Workflow, BookOpen, ChevronRight } from "lucide
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
 import { getConnectionSummary } from "@/repositories/channel-connection.repository";
+import { assertConnectionAccessOrNotFound } from "@/lib/rbac/connection-scope";
 import { getBotConfig } from "@/repositories/bot.repository";
 import { listSetores } from "@/services/setor.service";
 import { listFlows } from "@/services/flow.service";
@@ -13,7 +14,7 @@ import { Card } from "@/components/ui/card";
 export const metadata: Metadata = { title: "Atendimento" };
 
 /** Hub for everything related to how this connection attends customers —
- * AI attendant status (config itself still lives on the connection card,
+ * AI attendant status (config lives on its own page, atendimento/[connectionId]/ia,
  * see bot-attendant-section.tsx), Setores (handoff pools), and Fluxos
  * (visual flow builder). Base de Conhecimento (AI training) is planned but
  * not built yet — shown as "em breve" so the nav entry point exists ahead
@@ -30,6 +31,7 @@ export default async function AtendimentoConnectionPage({
 
   const connection = await getConnectionSummary(ctx.tenantId, connectionId);
   if (!connection) notFound();
+  assertConnectionAccessOrNotFound(ctx, connectionId);
 
   const [botConfig, setores, flows] = await Promise.all([
     getBotConfig(connectionId),
@@ -57,7 +59,7 @@ export default async function AtendimentoConnectionPage({
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Link href={`/app/${tenantSlug}/modulos/whatsapp`}>
+        <Link href={`/app/${tenantSlug}/modulos/whatsapp/atendimento/${connectionId}/ia`}>
           <Card className="flex items-center gap-3 p-4 hover:bg-muted/50">
             <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
               <Bot className="size-4 text-primary" />

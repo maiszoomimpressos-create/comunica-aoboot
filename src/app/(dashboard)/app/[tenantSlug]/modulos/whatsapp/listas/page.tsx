@@ -1,4 +1,6 @@
 import { redirect } from "next/navigation";
+import { tenantAwareHref } from "@/lib/server/tenant-href";
+
 
 /** "Listas" deixou de ser uma página própria — virou uma aba dentro de
  * Campanhas (ver [connectionId]/page.tsx). Mantido como redirect pra não
@@ -9,5 +11,5 @@ export default async function ListsRedirectPage({
   params: Promise<{ tenantSlug: string }>;
 }) {
   const { tenantSlug } = await params;
-  redirect(`/app/${tenantSlug}/modulos/whatsapp/campanhas?tab=listas`);
+  redirect(await tenantAwareHref(`/app/${tenantSlug}/modulos/whatsapp/campanhas?tab=listas`));
 }

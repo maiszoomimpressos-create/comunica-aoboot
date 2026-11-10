@@ -4,7 +4,9 @@
  *
  * Nó/aresta tipados de forma solta (campos extra permitidos) de propósito:
  * o motor só lê o que cada tipo de nó precisa, e nós ainda não suportados
- * (ai/action/human — fase 4) passam pelo grafo sem quebrar a leitura. */
+ * (action/human — fase 4) passam pelo grafo sem quebrar a leitura. `ai`
+ * já é suportado: entrega a conversa pro atendente de IA (ver nó `ai` em
+ * flow-engine.service.ts). */
 
 export type FlowNodeType =
   | "start"

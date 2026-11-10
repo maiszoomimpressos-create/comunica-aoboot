@@ -2,7 +2,8 @@
 
 import { z } from "zod";
 import { defineTenantAction } from "@/lib/server/actions/define-tenant-action";
-import { updateFlowGraph } from "@/services/flow.service";
+import { getFlow, updateFlowGraph } from "@/services/flow.service";
+import { assertConnectionAccess } from "@/lib/rbac/connection-scope";
 
 const optionSchema = z.object({ id: z.string().min(1), label: z.string() });
 
@@ -47,5 +48,7 @@ const schema = z.object({
 
 export const updateFlowAction = defineTenantAction("whatsapp.flows.manage", async (ctx, input: z.infer<typeof schema>) => {
   const parsed = schema.parse(input);
+  const flow = await getFlow(ctx.tenantId, parsed.flowId);
+  assertConnectionAccess(ctx, flow.connectionId);
   return updateFlowGraph(ctx.tenantId, parsed.flowId, parsed.graph, parsed.name);
 });

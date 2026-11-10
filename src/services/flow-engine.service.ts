@@ -56,29 +56,38 @@ function evaluateCondition(value: string, operator: "equals" | "contains" | unde
   return v === t; // "equals" é o default
 }
 
+/** `"handled"`: o fluxo respondeu, não deixa cair no bot de IA.
+ * `"not_applicable"`: esta conexão não tem fluxo publicado (ou o grafo é
+ * inválido, ou usa um nó action/human ainda não suportado) — segue pro
+ * atendente de IA normalmente, respeitando BotConfig.enabled como hoje.
+ * `"ai_handoff"`: o fluxo chegou num nó `ai` e está entregando a conversa
+ * de propósito pro atendente de IA — o chamador precisa repassar essa
+ * mensagem pra handleInboundMessage com bypassEnabledCheck, já que
+ * BotConfig.enabled normalmente está false enquanto o fluxo está publicado
+ * (ver publishFlow em flow.service.ts). */
+export type FlowMessageResult = "handled" | "not_applicable" | "ai_handoff";
+
 /** Ponto de entrada chamado de maybeHandleInboundBotMessage (ver
  * whatsapp-connection.service.ts), depois de tryHandleRelayMessage e antes
- * de handleInboundMessage (IA) — mesmo lugar na cadeia, mesma convenção de
- * retorno: `true` significa "já tratei, não deixa cair no bot de IA";
- * `false` significa "esta conexão não tem fluxo publicado (ou o grafo é
- * inválido/usa um nó ainda não suportado), segue pro atendente de IA
- * normalmente". Resolve credenciais/provider aqui mesmo, duplicado de
- * propósito em relação a handleInboundMessage/tryHandleRelayMessage, pra
- * manter os três pontos de entrada independentes. */
+ * de handleInboundMessage (IA) — ver FlowMessageResult acima pro
+ * significado de cada retorno. Resolve credenciais/provider aqui mesmo,
+ * duplicado de propósito em relação a handleInboundMessage/
+ * tryHandleRelayMessage, pra manter os três pontos de entrada
+ * independentes. */
 export async function tryHandleFlowMessage(params: {
   connectionId: string;
   fromPhone: string;
   customerName: string | null;
   text: string | null;
-}): Promise<boolean> {
+}): Promise<FlowMessageResult> {
   const { connectionId, fromPhone, text } = params;
 
   const flow = await findPublishedFlowForConnection(connectionId);
-  if (!flow || !flow.publishedGraph) return false;
+  if (!flow || !flow.publishedGraph) return "not_applicable";
   const graph = flow.publishedGraph as unknown as FlowGraph;
   if (!isFlowGraph(graph)) {
     await logBotEvent("warn", "flow_invalid_published_graph", { connectionId, flowId: flow.id });
-    return false;
+    return "not_applicable";
   }
 
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
@@ -88,7 +97,7 @@ export async function tryHandleFlowMessage(params: {
   const startNode = graph.nodes.find((n) => n.type === "start");
   if (!startNode) {
     await logBotEvent("warn", "flow_missing_start_node", { connectionId, flowId: flow.id });
-    return false;
+    return "not_applicable";
   }
 
   let session = await findActiveFlowSession(connectionId, fromPhone);
@@ -101,7 +110,7 @@ export async function tryHandleFlowMessage(params: {
   }
 
   const resolved = await resolveProvider(connectionId);
-  if (!resolved) return false;
+  if (!resolved) return "not_applicable";
   const { provider, providerConfig } = resolved;
 
   let isFresh = false;
@@ -119,15 +128,17 @@ export async function tryHandleFlowMessage(params: {
     // Esperando resposta de menu/pergunta mas o cliente mandou algo sem
     // texto (áudio, imagem, ...) — mesmo aviso usado em
     // relay-session.service.ts, não dá pra processar isso num nó que
-    // espera texto.
-    if (!text) {
+    // espera texto. Excessão: já entregue pro nó `ai` (handoff permanente,
+    // ver abaixo) — aí é a IA quem decide, e ela sabe transcrever áudio.
+    if (!text && byId.get(nodeId)?.type !== "ai") {
       await provider.sendMessage(
         providerConfig,
         fromPhone,
         "Por enquanto só consigo continuar o atendimento por texto — pode escrever?"
       );
-      return true;
+      return "handled";
     }
+    if (!text && byId.get(nodeId)?.type === "ai") return "ai_handoff";
   }
 
   let waitingNodeId: string | null = null;
@@ -271,7 +282,7 @@ export async function tryHandleFlowMessage(params: {
       const next = outgoing(node.id)[0];
       if (!next) {
         await completeFlowSession(session.id);
-        return true;
+        return "handled";
       }
       nodeId = next.target;
       continue;
@@ -292,19 +303,34 @@ export async function tryHandleFlowMessage(params: {
     if (node.type === "end") {
       if (node.data?.text) await provider.sendMessage(providerConfig, fromPhone, node.data.text);
       await completeFlowSession(session.id);
-      return true;
+      return "handled";
     }
 
-    // ai/action/human — fase 4, ainda não implementados. Não falha a
+    if (node.type === "ai") {
+      // Entrega a conversa pro atendente de IA de propósito — grava
+      // currentNodeId=node.id ANTES de devolver, diferente do fallback
+      // action/human abaixo, pra todo turno seguinte deste contato cair
+      // direto aqui de novo (sem reconstruir o caminho do menu/início) e
+      // repassar pra IA sem jamais voltar a mostrar o menu. O chamador
+      // (maybeHandleInboundBotMessage) é quem de fato invoca a IA, com
+      // bypassEnabledCheck — ver FlowMessageResult.
+      await updateFlowSessionState(session.id, { currentNodeId: node.id, variables }).catch(async (err) => {
+        await logBotEvent("error", "flow_session_persist_failed", { connectionId, flowId: flow.id, error: serializeError(err) });
+      });
+      return "ai_handoff";
+    }
+
+    // action/human — fase 4, ainda não implementados. Não falha a
     // conversa: desiste do fluxo neste turno e deixa o atendente de IA
-    // responder, mas mantém a sessão onde estava pra tentar de novo depois
-    // (um tenant só chega a publicar esses nós quando o editor existir).
+    // decidir normalmente (respeitando BotConfig.enabled), mas mantém a
+    // sessão onde estava pra tentar de novo depois (um tenant só chega a
+    // publicar esses nós quando o editor existir).
     await logBotEvent("warn", "flow_node_not_implemented", { connectionId, flowId: flow.id, nodeType: node.type });
-    return false;
+    return "not_applicable";
   }
 
   await updateFlowSessionState(session.id, { currentNodeId: waitingNodeId, variables }).catch(async (err) => {
     await logBotEvent("error", "flow_session_persist_failed", { connectionId, flowId: flow.id, error: serializeError(err) });
   });
-  return true;
+  return "handled";
 }

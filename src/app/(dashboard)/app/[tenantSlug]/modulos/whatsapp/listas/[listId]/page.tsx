@@ -5,6 +5,7 @@ import { ArrowLeft, Download } from "lucide-react";
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
 import { getListDetail } from "@/services/whatsapp-contacts.service";
+import { hasConnectionAccess } from "@/lib/rbac/connection-scope";
 import { NotFoundError } from "@/lib/server/errors";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,7 @@ export default async function ContactListDetailPage({
     throw err;
   });
   const { list, members, availableContacts } = detail;
+  if (list.connectionId && !hasConnectionAccess(ctx, list.connectionId)) notFound();
 
   return (
     <div className="max-w-3xl space-y-6">

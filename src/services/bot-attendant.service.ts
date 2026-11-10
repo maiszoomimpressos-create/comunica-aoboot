@@ -9,7 +9,7 @@ import {
   type LanguageModelUsage,
   type ModelMessage,
 } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
+import { resolveModel } from "@/lib/ai/resolve-model";
 import { z } from "zod";
 import { decryptSecret } from "@/lib/crypto/secret-box";
 import { getWhatsappProvider } from "@/lib/whatsapp/registry";
@@ -171,7 +171,18 @@ function currentGreetingWord(): string {
   return "Boa noite";
 }
 
-export type HandleInboundMessageInput = { connectionId: string; fromPhone: string; customerName: string | null } & (
+export type HandleInboundMessageInput = {
+  connectionId: string;
+  fromPhone: string;
+  customerName: string | null;
+  // Usado só pelo nó `ai` do Flow builder (ver flow-engine.service.ts): esse
+  // nó entrega a conversa pro atendente de IA de propósito, mesmo quando
+  // BotConfig.enabled está false — o que é o normal enquanto um Flow está
+  // PUBLISHED (ver comentário em publishFlow, flow.service.ts). Sem isso o
+  // nó `ai` ficaria mudo: a mensagem cairia aqui e seria descartada pelo
+  // check de `enabled` de baixo.
+  bypassEnabledCheck?: boolean;
+} & (
   | { text: string; audioUrl?: undefined }
   | { audioUrl: string; text?: undefined }
 );
@@ -439,22 +450,6 @@ async function buscarEndereco(
   } catch {
     return { encontrado: false };
   }
-}
-
-/** Resolve o modelo configurado no Super Admin (string "provider/model" do
- * AI Gateway) pra uma chamada direta à Anthropic quando `ANTHROPIC_API_KEY`
- * está disponível — evita depender de crédito pago no AI Gateway da Vercel
- * quando já existe saldo direto na conta da Anthropic. Fora do caso
- * "anthropic/...", ou sem a chave, usa a string normalmente via Gateway.
- * Conversão de ID: a Anthropic usa hífen em vez de ponto na versão (ex:
- * "anthropic/claude-haiku-5.5" -> "claude-haiku-5-5"), confirmado contra
- * GET /v1/models da própria Anthropic. */
-function resolveModel(modelString: string) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey || !modelString.startsWith("anthropic/")) return modelString;
-
-  const anthropicModelId = modelString.slice("anthropic/".length).replaceAll(".", "-");
-  return anthropic(anthropicModelId);
 }
 
 /** Never throws — feeds the Super Admin's "gasto de IA por conexão" screen
@@ -820,11 +815,11 @@ async function checkOpenRideUpdate(
  * logs/bot-attendant.log — a message that "arrives but the AI doesn't
  * reply" has no other trace to debug from otherwise. */
 export async function handleInboundMessage(input: HandleInboundMessageInput): Promise<void> {
-  const { connectionId, fromPhone, customerName } = input;
+  const { connectionId, fromPhone, customerName, bypassEnabledCheck } = input;
   await logBotEvent("info", "inbound_received", { connectionId, fromPhone, kind: "text" in input ? "text" : "audio" });
 
   const config = await getBotConfig(connectionId);
-  if (!config?.enabled) {
+  if (!config || (!config.enabled && !bypassEnabledCheck)) {
     await logBotEvent("info", "skipped_bot_disabled", { connectionId, fromPhone });
     return;
   }

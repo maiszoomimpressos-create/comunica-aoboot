@@ -4,7 +4,7 @@ import { headers } from "next/headers";
 import { prisma } from "@/lib/db/prisma";
 import { auth } from "@/lib/auth/auth";
 import type { TenantContext } from "@/lib/server/tenant-context";
-import type { PermissionCode } from "@/lib/rbac/permissions";
+import { PERMISSIONS, type PermissionCode } from "@/lib/rbac/permissions";
 
 export interface AuthenticatedUser {
   id: string;
@@ -53,6 +53,24 @@ export const getRequestContext = cache(
     });
 
     if (!membership) {
+      // Platform admins can open any tenant from admin > Testar without
+      // being a member — full permission set, read/write everything, so
+      // staging-gated features behave exactly like they will for tenants.
+      if (user.isPlatformAdmin) {
+        const organization = await prisma.organization.findUnique({
+          where: { slug: tenantSlug },
+        });
+        if (!organization) redirect("/app");
+        return {
+          userId: user.id,
+          tenantId: organization.id,
+          tenantSlug,
+          roleKey: "PLATFORM_ADMIN",
+          permissions: PERMISSIONS.map((p) => p.code),
+          isPlatformAdmin: true,
+          accessibleConnectionIds: null,
+        };
+      }
       // Authenticated, but not a member of this tenant — never leak
       // whether the slug exists.
       redirect("/app");
@@ -60,11 +78,18 @@ export const getRequestContext = cache(
 
     const role = await prisma.role.findUnique({
       where: { tenantId_key: { tenantId: membership.organizationId, key: membership.role } },
-      include: { rolePermissions: { include: { permission: true } } },
+      include: {
+        rolePermissions: { include: { permission: true } },
+        connectionScopes: { select: { connectionId: true } },
+      },
     });
 
     const permissions = (role?.rolePermissions.map((rp) => rp.permission.code) ??
       []) as PermissionCode[];
+
+    const accessibleConnectionIds = role?.connectionScopeEnabled
+      ? role.connectionScopes.map((s) => s.connectionId)
+      : null;
 
     return {
       userId: user.id,
@@ -73,6 +98,7 @@ export const getRequestContext = cache(
       roleKey: membership.role,
       permissions,
       isPlatformAdmin: user.isPlatformAdmin,
+      accessibleConnectionIds,
     };
   }
 );

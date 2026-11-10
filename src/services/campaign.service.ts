@@ -157,6 +157,15 @@ export async function getCampaignDetail(tenantId: string, campaignId: string) {
   return detail;
 }
 
+/** Resolve o connectionId dono desta campanha, pra checagem de connection
+ * scope na camada de action antes de start/pause/cancel — mesma convenção
+ * de getFlow em flow.service.ts. */
+export async function getCampaignConnectionId(tenantId: string, campaignId: string): Promise<string> {
+  const campaign = await getCampaignSummary(tenantId, campaignId);
+  if (!campaign) throw new NotFoundError("Campanha não encontrada.");
+  return campaign.connectionId;
+}
+
 // --- Transições --------------------------------------------------------------
 
 const ACTIVE_STATUSES = new Set(["RUNNING", "PAUSED"]);

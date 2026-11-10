@@ -32,6 +32,15 @@ export function listSetores(connectionId: string) {
   return listSetoresForConnection(connectionId);
 }
 
+/** Resolve o connectionId dono deste setor, pra checagem de connection scope
+ * na camada de action (ver assertConnectionAccess) antes de update/delete/
+ * setActive — mesma convenção de getFlow em flow.service.ts. */
+export async function getSetorConnectionId(tenantId: string, setorId: string): Promise<string> {
+  const setor = await findSetorForTenant(tenantId, setorId);
+  if (!setor) throw new NotFoundError("Setor não encontrado.");
+  return setor.connectionId;
+}
+
 export async function createSetor(tenantId: string, connectionId: string, input: SetorFormInput) {
   validateSetorInput(input);
   return createSetorRecord(tenantId, connectionId, {

@@ -20,3 +20,14 @@ export function updateTenant(tenantId: string, data: UpdateTenantInput) {
   // Better Auth's organization tables are just where the data lives.
   return prisma.organization.update({ where: { id: tenantId }, data });
 }
+
+/** Exclusão self-service pelo próprio Owner, de dentro do painel normal —
+ * sem exigir o status CANCELED que o fluxo do admin exige (ver deleteTenant
+ * em admin.repository.ts), porque um tenant comum não tem como mudar o
+ * próprio status (setTenantStatus é admin-only). A única salvaguarda aqui é
+ * a checagem de papel ("owner") + confirmação de slug feitas na action (ver
+ * actions/tenant/delete-tenant.ts) antes de chamar isto. Cascata idêntica —
+ * mesmas relações `onDelete: Cascade` do schema. */
+export async function deleteTenantAsOwner(tenantId: string) {
+  await prisma.organization.delete({ where: { id: tenantId } });
+}

@@ -6,8 +6,20 @@ import { generateApiKey, hashApiKey } from "@/lib/whatsapp/api-key";
 import { generateWebhookSecret } from "@/lib/whatsapp/webhook-secret";
 import { getWhatsappProvider } from "@/lib/whatsapp/registry";
 import { WHATSAPP_PRODUCTS } from "@/config/whatsapp-products";
-import { getNotificationType, type NotificationDetails } from "@/config/whatsapp-notification-types";
-import { isValidServiceKey, getServiceLabel } from "@/config/whatsapp-services";
+import {
+  NOTIFICATION_TYPES,
+  DEFAULT_NOTIFICATION_TYPE,
+  isValidNotificationTypeKey,
+  buildGreeting,
+  type NotificationDetails,
+} from "@/config/whatsapp-notification-types";
+import { isValidServiceKey } from "@/config/whatsapp-services";
+import {
+  getCustomNotificationTypeByKey,
+  isCustomNotificationTypeKeyTaken,
+  type CustomNotificationField,
+} from "@/repositories/custom-notification-type.repository";
+import { renderCustomMessageTemplate } from "@/services/custom-notification-type.service";
 import type {
   QrCodeResult,
   SendMessageResult,
@@ -30,6 +42,7 @@ import {
   updateConnectionMeta,
   updateConnectionStatus,
   updateEnabledServices,
+  updateEnabledNotificationTypes,
   updateConnectionStatusById,
   type ChannelConnectionSummary,
 } from "@/repositories/channel-connection.repository";
@@ -106,6 +119,7 @@ export async function requestConnection(
 export interface UpdateConnectionMetaInput {
   connectionName: string;
   phoneNumber: string;
+  businessName: string | null;
 }
 
 /** Tenant-facing: renames the connection and/or corrects the phone number
@@ -124,6 +138,7 @@ export async function updateConnectionMetadata(
   const result = await updateConnectionMeta(tenantId, connectionId, {
     connectionName: input.connectionName.trim(),
     phoneNumber: input.phoneNumber.trim(),
+    businessName: input.businessName?.trim() || null,
   });
   if (result.count === 0) throw new NotFoundError("Conexão não encontrada.");
 
@@ -181,6 +196,34 @@ export async function updateConnectionEnabledServices(
   }
 
   const result = await updateEnabledServices(tenantId, connectionId, cleaned);
+  if (result.count === 0) throw new NotFoundError("Conexão não encontrada.");
+
+  const summary = await getConnectionSummary(tenantId, connectionId);
+  if (!summary) throw new NotFoundError("Conexão atualizada, mas não encontrada ao recarregar.");
+  return summary;
+}
+
+/** Tenant-facing: sets which notification types (config/whatsapp-notification-types.ts)
+ * this connection's API key is allowed to send — enforced in
+ * sendPurchaseConfirmation. Mesmo padrão de updateConnectionEnabledServices,
+ * só que no nível de granularidade do tipo em vez do serviceKey amplo. */
+export async function updateConnectionEnabledNotificationTypes(
+  tenantId: string,
+  connectionId: string,
+  types: string[]
+): Promise<ChannelConnectionSummary> {
+  const cleaned = [...new Set(types)];
+  // Aceita tanto o catálogo fixo quanto funções personalizadas dessa
+  // conexão (ver CustomNotificationType) — um tipo só é inválido se não
+  // for nenhum dos dois.
+  const unknown = cleaned.filter((t) => !isValidNotificationTypeKey(t));
+  for (const key of unknown) {
+    if (!(await isCustomNotificationTypeKeyTaken(connectionId, key))) {
+      throw new ValidationError(`Tipo de notificação desconhecido: "${key}".`);
+    }
+  }
+
+  const result = await updateEnabledNotificationTypes(tenantId, connectionId, cleaned);
   if (result.count === 0) throw new NotFoundError("Conexão não encontrada.");
 
   const summary = await getConnectionSummary(tenantId, connectionId);
@@ -523,21 +566,25 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
   if (relayHandled) return;
 
   // Fluxo visual (ver flow-engine.service.ts): só intercepta quando esta
-  // conexão tem um Flow PUBLISHED — senão retorna `false` e cai pro
-  // atendente de IA normalmente, exatamente como hoje. Entra depois do
+  // conexão tem um Flow PUBLISHED — senão retorna "not_applicable" e cai
+  // pro atendente de IA normalmente, exatamente como hoje. Entra depois do
   // relay humano (uma conversa já escalada não deve voltar pro fluxo) e
-  // antes dos branches texto/áudio de handleInboundMessage.
-  const flowHandled = await tryHandleFlowMessage({ connectionId, fromPhone, customerName, text: bodyText });
-  if (flowHandled) return;
+  // antes dos branches texto/áudio de handleInboundMessage. "ai_handoff"
+  // significa que o fluxo chegou num nó `ai` — a IA precisa responder esta
+  // mesma mensagem mesmo com BotConfig.enabled=false (normal enquanto um
+  // Flow está publicado, ver publishFlow em flow.service.ts).
+  const flowResult = await tryHandleFlowMessage({ connectionId, fromPhone, customerName, text: bodyText });
+  if (flowResult === "handled") return;
+  const bypassEnabledCheck = flowResult === "ai_handoff";
 
   if (bodyText) {
-    await handleInboundMessage({ connectionId, fromPhone, customerName, text: bodyText });
+    await handleInboundMessage({ connectionId, fromPhone, customerName, text: bodyText, bypassEnabledCheck });
     return;
   }
 
   const audioUrl = isRecord(payload.audio) ? payload.audio.audioUrl : undefined;
   if (typeof audioUrl === "string" && audioUrl) {
-    await handleInboundMessage({ connectionId, fromPhone, customerName, audioUrl });
+    await handleInboundMessage({ connectionId, fromPhone, customerName, audioUrl, bypassEnabledCheck });
     return;
   }
 
@@ -620,11 +667,22 @@ export async function sendPurchaseConfirmation(
   const connection = await getConnectionByApiKeyHash(hashApiKey(apiKeyPlaintext));
   if (!connection) throw new UnauthorizedError("Chave de API inválida.");
 
-  const notificationType = getNotificationType(input.type);
-  if (!connection.enabledServices.includes(notificationType.serviceKey)) {
-    throw new ForbiddenError(
-      `Este serviço (${getServiceLabel(notificationType.serviceKey)}) não está habilitado para esta conexão.`
+  // Resolve contra o catálogo fixo primeiro; se não achar, pode ser uma
+  // função personalizada dessa conexão (ver CustomNotificationType) —
+  // mesmo `type` desconhecido continua dando o erro de sempre se não achar
+  // em nenhum dos dois.
+  const resolvedKey = input.type?.trim() || DEFAULT_NOTIFICATION_TYPE;
+  const builtInType = NOTIFICATION_TYPES.find((t) => t.key === resolvedKey);
+  const customType = builtInType ? null : await getCustomNotificationTypeByKey(connection.id, resolvedKey);
+  if (!builtInType && !customType) {
+    throw new ValidationError(
+      `Tipo de notificação inválido: "${resolvedKey}". Tipos disponíveis: ${NOTIFICATION_TYPES.map((t) => t.key).join(", ")}.`
     );
+  }
+  const label = builtInType?.label ?? customType!.label;
+
+  if (!connection.enabledNotificationTypes.includes(resolvedKey)) {
+    throw new ForbiddenError(`Este tipo de mensagem ("${label}") não está habilitado para esta conexão.`);
   }
   if (connection.status !== "CONNECTED") {
     throw new ConflictError("Esta conexão não está ativa no momento.");
@@ -634,14 +692,18 @@ export async function sendPurchaseConfirmation(
   }
 
   const details = input.details ?? {};
-  const missingDetails = notificationType.requiredDetailKeys.filter((key) => !details[key]?.trim());
+  const requiredKeys = builtInType
+    ? builtInType.requiredDetailKeys
+    : (customType!.fields as unknown as CustomNotificationField[])
+        .filter((f) => f.required !== false)
+        .map((f) => f.key);
+  const missingDetails = requiredKeys.filter((key) => !details[key]?.trim());
   if (missingDetails.length > 0) {
-    throw new ValidationError(
-      `O tipo "${notificationType.key}" precisa dos dados: ${missingDetails.join(", ")}.`
-    );
+    throw new ValidationError(`O tipo "${resolvedKey}" precisa dos dados: ${missingDetails.join(", ")}.`);
   }
-  if (notificationType.requiresQr && !input.qrData) {
-    throw new ValidationError(`O tipo "${notificationType.key}" exige o campo qrData.`);
+  const requiresQr = builtInType?.requiresQr ?? customType!.requiresQr;
+  if (requiresQr && !input.qrData) {
+    throw new ValidationError(`O tipo "${resolvedKey}" exige o campo qrData.`);
   }
 
   await touchApiKeyLastUsed(connection.id);
@@ -650,16 +712,41 @@ export async function sendPurchaseConfirmation(
   const provider = getWhatsappProvider(connection.provider.key);
   const config = { apiUrl: connection.apiUrl, apiToken, phoneNumber: connection.phoneNumber };
 
-  // Best-effort — a failed/empty lookup never blocks the send, it just
-  // means the greeting comes out generic ("Olá!").
-  const contactName = await provider.getContactName(config, input.to).catch(() => ({ ok: false as const }));
+  // Best-effort — a failed/empty/slow lookup never blocks the send; the
+  // greeting then uses the client-provided name or a generic "Olá!" /
+  // "Bom dia!". Short timeout so a hanging Z-API contact lookup doesn't
+  // delay the message (the provider's own fetch timeout is longer).
+  const CONTACT_NAME_TIMEOUT_MS = 3_000;
+  const contactName = await Promise.race([
+    provider.getContactName(config, input.to).catch(() => ({ ok: false as const })),
+    new Promise<{ ok: false }>((resolve) => {
+      setTimeout(() => resolve({ ok: false as const }), CONTACT_NAME_TIMEOUT_MS);
+    }),
+  ]);
+  const whatsappName = contactName.ok ? contactName.name ?? null : null;
+  const businessName =
+    connection.businessName || connection.organization.messageBusinessName || connection.organization.name;
 
-  const baseMessage = notificationType.buildMessage({
-    whatsappName: contactName.ok ? contactName.name ?? null : null,
-    recipientName: input.recipientName,
-    businessName: connection.organization.messageBusinessName || connection.organization.name,
-    details,
-  });
+  // Tipo personalizado: o template nunca inclui saudação (instrução na
+  // geração por IA, ver notification-type-generator.service.ts) — ela é
+  // sempre prefixada aqui, com o estilo/nome escolhidos pelo tenant na
+  // criação da função (buildGreeting), pro tom ficar igual ao dos tipos
+  // fixos quando configurado assim.
+  const baseMessage = builtInType
+    ? builtInType.buildMessage({ whatsappName, recipientName: input.recipientName, businessName, details })
+    : `${buildGreeting({
+        style: customType!.greetingStyle,
+        nameSource: customType!.greetingNameSource,
+        whatsappName,
+        recipientName: input.recipientName,
+        details,
+        fields: customType!.fields as unknown as CustomNotificationField[],
+      })}\n\n${renderCustomMessageTemplate(
+        customType!.messageTemplate,
+        customType!.fields as unknown as CustomNotificationField[],
+        details,
+        businessName
+      )}`;
   const message = input.note?.trim() ? `${baseMessage}\n\n${input.note.trim()}` : baseMessage;
 
   if (input.qrData) {

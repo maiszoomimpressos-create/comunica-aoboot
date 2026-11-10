@@ -21,3 +21,50 @@ export function normalizeBrazilianMobile(phone: string): string {
   if (!isUnninthedBrMobile) return digits;
   return `${digits.slice(0, 4)}9${digits.slice(4)}`;
 }
+
+/** Normaliza e valida um número de WhatsApp brasileiro informado pelo usuário
+ * (aceita máscara, espaços, `+55`, DDD+número). Devolve dígitos no formato
+ * que o provedor espera (`5511999999999`) e o E.164 com `+` para exibir. */
+export function parseBrazilianWhatsappNumber(
+  raw: string
+): { ok: true; digits: string; e164: string; display: string } | { ok: false; error: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { ok: false, error: "Informe o número de destino." };
+  }
+
+  let digits = trimmed.replace(/\D/g, "");
+  if (!digits) {
+    return { ok: false, error: "Informe um número brasileiro válido, com DDD. Ex: (11) 99999-9999." };
+  }
+  if (digits.startsWith("0")) {
+    digits = digits.replace(/^0+/, "");
+  }
+  if (digits.length === 10 || digits.length === 11) {
+    digits = `55${digits}`;
+  }
+  digits = normalizeBrazilianMobile(digits);
+
+  if (!digits.startsWith("55") || (digits.length !== 12 && digits.length !== 13)) {
+    return { ok: false, error: "Informe um número brasileiro válido, com DDD. Ex: (11) 99999-9999." };
+  }
+
+  const ddd = Number(digits.slice(2, 4));
+  if (ddd < 11 || ddd > 99) {
+    return { ok: false, error: "DDD inválido. Informe DDI + DDD + número. Ex: (11) 99999-9999." };
+  }
+
+  return { ok: true, digits, e164: `+${digits}`, display: formatE164BrDisplay(digits) };
+}
+
+/** Formata dígitos `55…` para um E.164 legível, ex. `+55 11 99999-9999`. */
+export function formatE164BrDisplay(digits: string): string {
+  if (digits.startsWith("55") && digits.length === 13) {
+    return `+55 ${digits.slice(2, 4)} ${digits.slice(4, 9)}-${digits.slice(9)}`;
+  }
+  if (digits.startsWith("55") && digits.length === 12) {
+    return `+55 ${digits.slice(2, 4)} ${digits.slice(4, 8)}-${digits.slice(8)}`;
+  }
+  return digits.startsWith("55") ? `+${digits}` : digits;
+}
+

@@ -16,6 +16,7 @@ const TYPE_LABEL: Record<string, string> = {
   condition: "Condição",
   form: "Formulário",
   end: "Fim",
+  ai: "IA / Atendente",
 };
 
 const FIELD_TYPE_LABEL: Record<FormFieldType, string> = {
@@ -289,6 +290,15 @@ export function FlowNodePanel({
               placeholder="Ex: Obrigado! Qualquer coisa só chamar de novo."
             />
           </div>
+        )}
+
+        {node.type === "ai" && (
+          <p className="text-sm text-muted-foreground">
+            A partir daqui, a conversa passa a ser respondida pelo Atendente de IA desta conexão (o mesmo
+            configurado em Atendimento → IA), e o fluxo não volta a interceptar as próximas mensagens deste
+            contato. Use este nó pra deixar o cliente escolher, por exemplo, entre falar com o atendente geral
+            ou pedir uma corrida — ambos caem aqui, a IA decide o resto.
+          </p>
         )}
       </div>
     </div>

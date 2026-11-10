@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 import { defineTenantAction } from "@/lib/server/actions/define-tenant-action";
-import { createRole } from "@/repositories/role.repository";
+import { createRole, updateRoleConnectionScope } from "@/repositories/role.repository";
 import { PERMISSIONS, type PermissionCode } from "@/lib/rbac/permissions";
 import { slugify } from "@/lib/utils/slug";
 import { prisma } from "@/lib/db/prisma";
@@ -12,6 +12,8 @@ const permissionCodes = PERMISSIONS.map((p) => p.code) as [PermissionCode, ...Pe
 const schema = z.object({
   name: z.string().min(2, "Informe o nome do papel."),
   permissions: z.array(z.enum(permissionCodes)),
+  connectionScopeEnabled: z.boolean().default(false),
+  scopedConnectionIds: z.array(z.string()).default([]),
 });
 
 export const createRoleAction = defineTenantAction(
@@ -33,6 +35,14 @@ export const createRoleAction = defineTenantAction(
       name: parsed.name,
       permissionCodes: parsed.permissions,
     });
+
+    if (parsed.connectionScopeEnabled || parsed.scopedConnectionIds.length > 0) {
+      await updateRoleConnectionScope(ctx.tenantId, role.id, {
+        enabled: parsed.connectionScopeEnabled,
+        connectionIds: parsed.scopedConnectionIds,
+      });
+    }
+
     return { roleId: role.id };
   }
 );

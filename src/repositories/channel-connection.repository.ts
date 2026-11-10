@@ -6,6 +6,9 @@ export interface ChannelConnectionSummary {
   id: string;
   connectionName: string;
   phoneNumber: string;
+  // Sobrepõe Organization.messageBusinessName só pra esta conexão — ver
+  // sendPurchaseConfirmation em whatsapp-connection.service.ts.
+  businessName: string | null;
   apiUrl: string | null;
   status: ChannelConnectionStatus;
   lastValidation: Date | null;
@@ -22,6 +25,9 @@ export interface ChannelConnectionSummary {
   // Quais serviços (config/whatsapp-services.ts) a chave de API pode
   // chamar — ver sendPurchaseConfirmation / sendBalanceAlert.
   enabledServices: string[];
+  // Quais tipos de notificação (config/whatsapp-notification-types.ts) essa
+  // conexão pode disparar — ver sendPurchaseConfirmation.
+  enabledNotificationTypes: string[];
   // Config do atendente de IA (ver bot-attendant.service.ts) — null quando
   // o tenant nunca salvou nada ainda (equivale a desativado).
   botConfig: { enabled: boolean; businessProfile: string | null; verticalId: string | null } | null;
@@ -31,6 +37,7 @@ const summarySelect = {
   id: true,
   connectionName: true,
   phoneNumber: true,
+  businessName: true,
   apiUrl: true,
   status: true,
   lastValidation: true,
@@ -42,6 +49,7 @@ const summarySelect = {
   apiKeyLastUsedAt: true,
   balanceAlertPhones: true,
   enabledServices: true,
+  enabledNotificationTypes: true,
   botConfig: { select: { enabled: true, businessProfile: true, verticalId: true } },
 } as const;
 
@@ -106,7 +114,7 @@ export function createPendingConnection(input: CreatePendingConnectionInput) {
 export function updateConnectionMeta(
   tenantId: string,
   connectionId: string,
-  data: { connectionName: string; phoneNumber: string }
+  data: { connectionName: string; phoneNumber: string; businessName: string | null }
 ) {
   return prisma.channelConnection.updateMany({
     where: { id: connectionId, tenantId },
@@ -132,6 +140,17 @@ export function updateEnabledServices(tenantId: string, connectionId: string, se
   return prisma.channelConnection.updateMany({
     where: { id: connectionId, tenantId },
     data: { enabledServices: services },
+  });
+}
+
+/** Tenant-editable set of notification types (config/whatsapp-notification-types.ts)
+ * this connection's API key is allowed to send — enforced in
+ * sendPurchaseConfirmation, mesmo padrão de updateEnabledServices mas no
+ * nível de granularidade do tipo, não do serviceKey amplo. */
+export function updateEnabledNotificationTypes(tenantId: string, connectionId: string, types: string[]) {
+  return prisma.channelConnection.updateMany({
+    where: { id: connectionId, tenantId },
+    data: { enabledNotificationTypes: types },
   });
 }
 

@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,32 +29,49 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { PermissionMatrix } from "./permission-matrix";
+import { ConnectionScopeMatrix } from "./connection-scope-matrix";
 import type { TenantRole } from "@/repositories/role.repository";
+import type { SegmentoSummary } from "@/repositories/segmento.repository";
 import type { PermissionCode } from "@/lib/rbac/permissions";
 import { createRoleAction } from "@/actions/roles/create-role";
 import { updateRolePermissionsAction } from "@/actions/roles/update-role-permissions";
+import { updateRoleConnectionScopeAction } from "@/actions/roles/update-role-connection-scope";
 import { deleteRoleAction } from "@/actions/roles/delete-role";
+
+interface ConnectionOption {
+  id: string;
+  connectionName: string;
+  phoneNumber: string;
+}
 
 export function RoleManager({
   tenantSlug,
   roles,
   canManage,
+  connections,
+  segmentos,
 }: {
   tenantSlug: string;
   roles: TenantRole[];
   canManage: boolean;
+  connections: ConnectionOption[];
+  segmentos: SegmentoSummary[];
 }) {
   const router = useRouter();
   const [editingRole, setEditingRole] = useState<TenantRole | null>(null);
   const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<PermissionCode[]>([]);
   const [newName, setNewName] = useState("");
+  const [scopeEnabled, setScopeEnabled] = useState(false);
+  const [scopedConnectionIds, setScopedConnectionIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   function openEdit(role: TenantRole) {
     setEditingRole(role);
     setSelected(role.permissions);
+    setScopeEnabled(role.connectionScopeEnabled);
+    setScopedConnectionIds(role.scopedConnectionIds);
     setError(null);
   }
 
@@ -61,6 +79,8 @@ export function RoleManager({
     setCreating(true);
     setNewName("");
     setSelected([]);
+    setScopeEnabled(false);
+    setScopedConnectionIds([]);
     setError(null);
   }
 
@@ -72,9 +92,19 @@ export function RoleManager({
       roleId: editingRole.id,
       permissions: selected,
     });
-    setSaving(false);
     if (!result.success) {
+      setSaving(false);
       setError(result.error.message);
+      return;
+    }
+    const scopeResult = await updateRoleConnectionScopeAction(tenantSlug, {
+      roleId: editingRole.id,
+      enabled: scopeEnabled,
+      connectionIds: scopedConnectionIds,
+    });
+    setSaving(false);
+    if (!scopeResult.success) {
+      setError(scopeResult.error.message);
       return;
     }
     setEditingRole(null);
@@ -84,7 +114,12 @@ export function RoleManager({
   async function handleCreate() {
     setSaving(true);
     setError(null);
-    const result = await createRoleAction(tenantSlug, { name: newName, permissions: selected });
+    const result = await createRoleAction(tenantSlug, {
+      name: newName,
+      permissions: selected,
+      connectionScopeEnabled: scopeEnabled,
+      scopedConnectionIds,
+    });
     setSaving(false);
     if (!result.success) {
       setError(result.error.message);
@@ -130,6 +165,20 @@ export function RoleManager({
                   />
                 </Field>
                 <PermissionMatrix selected={selected} onChange={setSelected} />
+                <div className="space-y-3 border-t border-border pt-4">
+                  <label className="flex items-center justify-between gap-2 text-sm font-medium">
+                    Restringir conexões de WhatsApp deste papel
+                    <Switch checked={scopeEnabled} onCheckedChange={setScopeEnabled} />
+                  </label>
+                  {scopeEnabled && (
+                    <ConnectionScopeMatrix
+                      connections={connections}
+                      segmentos={segmentos}
+                      selected={scopedConnectionIds}
+                      onChange={setScopedConnectionIds}
+                    />
+                  )}
+                </div>
                 {error && <p className="text-sm text-destructive">{error}</p>}
               </div>
               <SheetFooter>
@@ -178,6 +227,20 @@ export function RoleManager({
                     </SheetHeader>
                     <div className="space-y-5 px-4">
                       <PermissionMatrix selected={selected} onChange={setSelected} />
+                      <div className="space-y-3 border-t border-border pt-4">
+                        <label className="flex items-center justify-between gap-2 text-sm font-medium">
+                          Restringir conexões de WhatsApp deste papel
+                          <Switch checked={scopeEnabled} onCheckedChange={setScopeEnabled} />
+                        </label>
+                        {scopeEnabled && (
+                          <ConnectionScopeMatrix
+                            connections={connections}
+                            segmentos={segmentos}
+                            selected={scopedConnectionIds}
+                            onChange={setScopedConnectionIds}
+                          />
+                        )}
+                      </div>
                       {error && <p className="text-sm text-destructive">{error}</p>}
                     </div>
                     <SheetFooter>

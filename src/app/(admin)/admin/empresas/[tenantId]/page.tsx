@@ -4,6 +4,7 @@ import { getTenantDetail } from "@/repositories/admin.repository";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TenantStatusActions } from "@/components/admin/empresas/tenant-status-actions";
+import { DeleteTenantButton } from "@/components/admin/empresas/delete-tenant-button";
 
 export const metadata: Metadata = { title: "Detalhes da empresa · Admin" };
 
@@ -31,6 +32,9 @@ export default async function AdminEmpresaDetailPage({
             {tenant.status}
           </Badge>
           <TenantStatusActions tenantId={tenant.id} status={tenant.status} />
+          {tenant.status === "CANCELED" && (
+            <DeleteTenantButton tenantId={tenant.id} slug={tenant.slug} />
+          )}
         </div>
       </div>
 

@@ -2,7 +2,8 @@
 
 import { z } from "zod";
 import { defineTenantAction } from "@/lib/server/actions/define-tenant-action";
-import { addContactsToList } from "@/services/whatsapp-contacts.service";
+import { addContactsToList, getListConnectionId } from "@/services/whatsapp-contacts.service";
+import { assertConnectionAccess } from "@/lib/rbac/connection-scope";
 
 const schema = z.object({
   listId: z.string().min(1),
@@ -13,6 +14,8 @@ export const addContactsToListAction = defineTenantAction(
   "campaigns.manage",
   async (ctx, input: z.infer<typeof schema>) => {
     const { listId, contactIds } = schema.parse(input);
+    const connectionId = await getListConnectionId(ctx.tenantId, listId);
+    if (connectionId) assertConnectionAccess(ctx, connectionId);
     const added = await addContactsToList(ctx.tenantId, listId, contactIds);
     return { added };
   }

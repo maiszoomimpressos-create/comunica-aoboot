@@ -7,12 +7,17 @@ export interface TenantRole {
   name: string;
   isSystem: boolean;
   permissions: PermissionCode[];
+  connectionScopeEnabled: boolean;
+  scopedConnectionIds: string[];
 }
 
 export async function listRolesWithPermissions(tenantId: string): Promise<TenantRole[]> {
   const roles = await prisma.role.findMany({
     where: { tenantId },
-    include: { rolePermissions: { include: { permission: true } } },
+    include: {
+      rolePermissions: { include: { permission: true } },
+      connectionScopes: { select: { connectionId: true } },
+    },
     orderBy: [{ isSystem: "desc" }, { name: "asc" }],
   });
   return roles.map((r) => ({
@@ -21,6 +26,8 @@ export async function listRolesWithPermissions(tenantId: string): Promise<Tenant
     name: r.name,
     isSystem: r.isSystem,
     permissions: r.rolePermissions.map((rp) => rp.permission.code as PermissionCode),
+    connectionScopeEnabled: r.connectionScopeEnabled,
+    scopedConnectionIds: r.connectionScopes.map((s) => s.connectionId),
   }));
 }
 
@@ -66,6 +73,46 @@ export async function updateRolePermissions(
         rolePermissions: { create: permissions.map((p) => ({ permissionId: p.id })) },
       },
     });
+  });
+}
+
+/** Full-replace, same shape as updateRolePermissions: wipes the role's
+ * current connection scope and recreates it from `connectionIds`, in one
+ * transaction with flipping `connectionScopeEnabled`. See the comment on
+ * Role.connectionScopeEnabled in schema.prisma for why `enabled` is a
+ * separate flag instead of inferring "unrestricted" from an empty list. */
+export async function updateRoleConnectionScope(
+  tenantId: string,
+  roleId: string,
+  params: { enabled: boolean; connectionIds: string[] }
+) {
+  const role = await prisma.role.findFirst({ where: { id: roleId, tenantId } });
+  if (!role) return null;
+
+  return prisma.$transaction(async (tx) => {
+    await tx.roleConnectionScope.deleteMany({ where: { roleId } });
+    await tx.role.update({
+      where: { id: roleId },
+      data: {
+        connectionScopeEnabled: params.enabled,
+        connectionScopes: params.enabled
+          ? { create: params.connectionIds.map((connectionId) => ({ connectionId })) }
+          : undefined,
+      },
+    });
+  });
+}
+
+/** Called right after a connection-scoped role's holder requests a brand
+ * new ChannelConnection (see actions/segmentos/create-segmento.ts) — so
+ * nobody loses access to what they just created. No-op for unrestricted
+ * roles (connectionScopeEnabled false means "sees everything" already). */
+export async function addConnectionToRoleScope(roleId: string, connectionId: string) {
+  const role = await prisma.role.findUnique({ where: { id: roleId } });
+  if (!role?.connectionScopeEnabled) return;
+  await prisma.roleConnectionScope.createMany({
+    data: [{ roleId, connectionId }],
+    skipDuplicates: true,
   });
 }
 

@@ -5,6 +5,7 @@ import { ArrowLeft } from "lucide-react";
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
 import { getConnectionSummary } from "@/repositories/channel-connection.repository";
+import { assertConnectionAccessOrNotFound } from "@/lib/rbac/connection-scope";
 import { listSetores } from "@/services/setor.service";
 import { SetoresManager } from "@/components/dashboard/whatsapp/setores-manager";
 
@@ -22,6 +23,7 @@ export default async function SetoresConnectionPage({
 
   const connection = await getConnectionSummary(ctx.tenantId, connectionId);
   if (!connection) notFound();
+  assertConnectionAccessOrNotFound(ctx, connectionId);
 
   const setores = await listSetores(connectionId);
 

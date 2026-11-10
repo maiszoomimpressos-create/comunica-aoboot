@@ -22,7 +22,11 @@ export function Topbar({
   permissions: PermissionCode[];
   user: { name: string; email: string; image: string | null; isPlatformAdmin: boolean };
 }) {
-  const items = NAV_ITEMS.filter((item) => !item.permission || permissions.includes(item.permission));
+  const items = NAV_ITEMS.filter(
+    (item) =>
+      (item.ready || user.isPlatformAdmin) &&
+      (!item.permission || permissions.includes(item.permission))
+  );
 
   return (
     <header className="flex h-14 items-center gap-3 border-b border-border px-4 lg:px-6">

@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { defineTenantAction } from "@/lib/server/actions/define-tenant-action";
 import { createSetor } from "@/services/setor.service";
+import { assertConnectionAccess } from "@/lib/rbac/connection-scope";
 
 const schema = z.object({
   connectionId: z.string().min(1),
@@ -16,6 +17,7 @@ const schema = z.object({
  * pro schema (Setor/SetorAttendant). */
 export const createSetorAction = defineTenantAction("whatsapp.manage", async (ctx, input: z.infer<typeof schema>) => {
   const parsed = schema.parse(input);
+  assertConnectionAccess(ctx, parsed.connectionId);
   return createSetor(ctx.tenantId, parsed.connectionId, {
     name: parsed.name,
     description: parsed.description ?? null,

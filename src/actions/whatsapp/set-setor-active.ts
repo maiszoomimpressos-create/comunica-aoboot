@@ -2,7 +2,8 @@
 
 import { z } from "zod";
 import { defineTenantAction } from "@/lib/server/actions/define-tenant-action";
-import { setSetorActive } from "@/services/setor.service";
+import { setSetorActive, getSetorConnectionId } from "@/services/setor.service";
+import { assertConnectionAccess } from "@/lib/rbac/connection-scope";
 
 const schema = z.object({ setorId: z.string().min(1), active: z.boolean() });
 
@@ -10,5 +11,6 @@ const schema = z.object({ setorId: z.string().min(1), active: z.boolean() });
  * enum dinâmico que a IA vê (ver listActiveSetoresWithAttendants). */
 export const setSetorActiveAction = defineTenantAction("whatsapp.manage", async (ctx, input: z.infer<typeof schema>) => {
   const parsed = schema.parse(input);
+  assertConnectionAccess(ctx, await getSetorConnectionId(ctx.tenantId, parsed.setorId));
   return setSetorActive(ctx.tenantId, parsed.setorId, parsed.active);
 });

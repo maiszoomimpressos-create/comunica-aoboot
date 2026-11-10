@@ -12,8 +12,9 @@ import { updateBotConfigAction } from "@/actions/whatsapp/update-bot-config";
 /** Lets the tenant turn the AI attendant on/off for this connection, pick
  * which business vertical it's acting as (see BotVertical — mobilidade,
  * delivery, ...), and write the business profile text appended to the
- * vertical's system prompt (see bot-attendant.service.ts). Shown inside
- * ConnectionCard, manage-only, same place as ApiKeySection. */
+ * vertical's system prompt (see bot-attendant.service.ts). Rendered on its
+ * own page (atendimento/[connectionId]/ia) reached from the "Atendente de
+ * IA" card on the Atendimento hub — manage-only. */
 export function BotAttendantSection({
   tenantSlug,
   connectionId,
@@ -64,7 +65,7 @@ export function BotAttendantSection({
   }
 
   return (
-    <div className="mt-4 border-t border-border pt-4">
+    <div>
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-1.5 text-sm font-medium">
           <Bot className="size-4 text-muted-foreground" />
@@ -79,14 +80,31 @@ export function BotAttendantSection({
       <div className="mt-3">
         <Select value={verticalId ?? undefined} onValueChange={handleVerticalChange} disabled={saving}>
           <SelectTrigger className="w-full">
-            <SelectValue placeholder="Selecione o nicho do negócio" />
+            {/* Select.Value do Base UI mostra o `value` cru (o id) por padrão
+             * — diferente do Radix, não resolve sozinho o label do item
+             * selecionado. Por isso o lookup manual aqui; `children` também
+             * substitui o `placeholder` por completo, então repete o texto
+             * quando não há seleção. */}
+            <SelectValue>
+              {(value: string | null) =>
+                verticals.find((v) => v.id === value)?.label ?? "Selecione o nicho do negócio"
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {verticals.map((vertical) => (
-              <SelectItem key={vertical.id} value={vertical.id}>
-                {vertical.label}
-              </SelectItem>
-            ))}
+            {verticals.map((vertical) => {
+              // Delivery só tem o prompt de conversa, sem ferramenta real de
+              // pedido por trás (ao contrário de mobilidade, com
+              // pedir_corrida/pedir_entrega via MAI Drive) — fica visível no
+              // catálogo mas desabilitado até ter integração de verdade.
+              const comingSoon = vertical.key === "delivery";
+              return (
+                <SelectItem key={vertical.id} value={vertical.id} disabled={comingSoon}>
+                  {vertical.label}
+                  {comingSoon ? " (em breve)" : ""}
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
       </div>

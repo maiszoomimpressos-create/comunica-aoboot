@@ -25,7 +25,11 @@ export function Sidebar({
   pendingWhatsappRequests: number;
 }) {
   const pathname = usePathname();
-  const items = NAV_ITEMS.filter((item) => !item.permission || permissions.includes(item.permission));
+  const items = NAV_ITEMS.filter(
+    (item) =>
+      (item.ready || isPlatformAdmin) &&
+      (!item.permission || permissions.includes(item.permission))
+  );
 
   return (
     <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-sidebar text-sidebar-foreground lg:flex">

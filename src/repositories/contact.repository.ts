@@ -98,18 +98,20 @@ export interface SyncedContact {
 /**
  * Upserts the connection's synced address book: existing phones get their
  * name refreshed (never touches `optedOut` — a re-sync must never silently
- * undo an opt-out), new phones are inserted with `source: "sync"`. Chunked
- * (concurrency of 20) instead of one giant sequential loop or a single
- * `createMany`, since we need per-row upsert semantics (insert-or-update)
- * that `createMany` doesn't support — fine for the address-book sizes this
- * targets; a very large book (tens of thousands) would need a bulk
- * SQL upsert instead, not attempted here.
+ * undo an opt-out), new phones are inserted with the given `source`
+ * (defaults to "sync"; CSV import passes "import" — see
+ * importContactsFromCsv). Chunked (concurrency of 20) instead of one giant
+ * sequential loop or a single `createMany`, since we need per-row upsert
+ * semantics (insert-or-update) that `createMany` doesn't support — fine for
+ * the address-book sizes this targets; a very large book (tens of
+ * thousands) would need a bulk SQL upsert instead, not attempted here.
  */
 export async function upsertSyncedContacts(
   tenantId: string,
   connectionId: string,
   originPhoneNumber: string,
-  contacts: SyncedContact[]
+  contacts: SyncedContact[],
+  source: string = "sync"
 ): Promise<{ created: number; updated: number }> {
   const existing = await prisma.contact.findMany({
     where: { tenantId, connectionId },
@@ -133,7 +135,7 @@ export async function upsertSyncedContacts(
               connectionId,
               phone: contact.phone,
               name: contact.name,
-              source: "sync",
+              source,
               originPhoneNumber,
             },
           });
@@ -157,6 +159,23 @@ export async function upsertSyncedContacts(
   }
 
   return { created, updated };
+}
+
+/** Resolve os ids de contatos desta conexão a partir de uma lista de
+ * telefones já normalizados — usado logo após um upsert (sync ou import)
+ * pra pegar os ids recém-criados/atualizados e montá-los numa lista, sem
+ * precisar que upsertSyncedContacts devolva os ids ela mesma. */
+export async function findContactIdsByPhones(
+  tenantId: string,
+  connectionId: string,
+  phones: string[]
+): Promise<string[]> {
+  if (phones.length === 0) return [];
+  const rows = await prisma.contact.findMany({
+    where: { tenantId, connectionId, phone: { in: phones } },
+    select: { id: true },
+  });
+  return rows.map((r) => r.id);
 }
 
 /** Manual bloqueio pelo painel — nunca reverte automaticamente num sync. */

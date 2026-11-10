@@ -8,6 +8,12 @@ export interface TenantContext {
   roleKey: string;
   permissions: PermissionCode[];
   isPlatformAdmin: boolean;
+  /** null = unrestricted (sees every ChannelConnection in the tenant) — the
+   * default for every role unless connectionScopeEnabled was turned on in
+   * Papéis. A non-null array is the explicit allow-list and can legitimately
+   * be empty (role restricted but nothing granted yet). See
+   * lib/rbac/connection-scope.ts for how this gets enforced. */
+  accessibleConnectionIds: string[] | null;
 }
 
 export const tenantALS = new AsyncLocalStorage<TenantContext>();

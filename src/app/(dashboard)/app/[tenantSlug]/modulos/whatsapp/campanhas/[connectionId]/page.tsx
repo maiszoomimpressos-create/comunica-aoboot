@@ -10,11 +10,13 @@ import {
   getListsForTenant,
 } from "@/services/whatsapp-contacts.service";
 import { listCampaignsForConnection, getConnectionCampaignSettings } from "@/services/campaign.service";
+import { assertConnectionAccessOrNotFound } from "@/lib/rbac/connection-scope";
 import { SyncContactsButton } from "@/components/dashboard/whatsapp/campaigns/sync-contacts-button";
 import { SyncGroupDialog } from "@/components/dashboard/whatsapp/campaigns/sync-group-dialog";
 import { CollapsibleContactsSection } from "@/components/dashboard/whatsapp/campaigns/collapsible-contacts-section";
 import { ContactListCard } from "@/components/dashboard/whatsapp/campaigns/contact-list-card";
 import { CreateAssembledListDialog } from "@/components/dashboard/whatsapp/campaigns/create-assembled-list-dialog";
+import { ImportCsvListDialog } from "@/components/dashboard/whatsapp/campaigns/import-csv-list-dialog";
 import { CreateCampaignDialog } from "@/components/dashboard/whatsapp/campaigns/create-campaign-dialog";
 import { CampaignCard } from "@/components/dashboard/whatsapp/campaigns/campaign-card";
 import { CampaignSettingsDialog } from "@/components/dashboard/whatsapp/campaigns/campaign-settings-dialog";
@@ -41,6 +43,7 @@ export default async function CampaignsConnectionPage({
 
   const connection = await getConnectionForCampaigns(ctx.tenantId, connectionId);
   if (!connection) notFound();
+  assertConnectionAccessOrNotFound(ctx, connectionId);
 
   const backLink = (
     <Link
@@ -175,7 +178,12 @@ export default async function CampaignsConnectionPage({
                 <p className="text-sm text-muted-foreground">
                   Sem número de origem — junte contatos de uma ou mais listas extraídas.
                 </p>
-                {canManage && <CreateAssembledListDialog tenantSlug={tenantSlug} />}
+                {canManage && (
+                  <div className="flex gap-2">
+                    <ImportCsvListDialog tenantSlug={tenantSlug} connectionId={connectionId} />
+                    <CreateAssembledListDialog tenantSlug={tenantSlug} />
+                  </div>
+                )}
               </div>
               {assembledLists.length === 0 ? (
                 <p className="text-sm text-muted-foreground">Nenhuma lista montada ainda.</p>

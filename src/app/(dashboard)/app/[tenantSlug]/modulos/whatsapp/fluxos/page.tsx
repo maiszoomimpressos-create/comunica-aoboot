@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { tenantAwareHref } from "@/lib/server/tenant-href";
+
 import { Workflow, ArrowLeft } from "lucide-react";
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
 import { listConnectionsForTenant } from "@/repositories/channel-connection.repository";
+import { filterAccessibleConnections } from "@/lib/rbac/connection-scope";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -23,11 +26,14 @@ export default async function FluxosLandingPage({
   const ctx = await getRequestContext(tenantSlug);
   requirePermission(ctx, "whatsapp.flows.manage");
 
-  const connections = await listConnectionsForTenant(ctx.tenantId, "WHATSAPP");
+  const connections = filterAccessibleConnections(
+    await listConnectionsForTenant(ctx.tenantId, "WHATSAPP"),
+    ctx
+  );
   const connected = connections.filter((c) => c.status === "CONNECTED");
 
   if (connected.length === 1) {
-    redirect(`/app/${tenantSlug}/modulos/whatsapp/fluxos/${connected[0].id}`);
+    redirect(await tenantAwareHref(`/app/${tenantSlug}/modulos/whatsapp/fluxos/${connected[0].id}`));
   }
 
   if (connected.length === 0) {

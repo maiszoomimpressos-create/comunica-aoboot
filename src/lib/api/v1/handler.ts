@@ -35,10 +35,16 @@ async function resolveApiTenantContext(request: NextRequest): Promise<TenantCont
 
   const role = await prisma.role.findUnique({
     where: { tenantId_key: { tenantId: membership.organizationId, key: membership.role } },
-    include: { rolePermissions: { include: { permission: true } } },
+    include: {
+      rolePermissions: { include: { permission: true } },
+      connectionScopes: { select: { connectionId: true } },
+    },
   });
   const permissions = (role?.rolePermissions.map((rp) => rp.permission.code) ??
     []) as PermissionCode[];
+  const accessibleConnectionIds = role?.connectionScopeEnabled
+    ? role.connectionScopes.map((s) => s.connectionId)
+    : null;
 
   return {
     userId: session.user.id,
@@ -47,6 +53,7 @@ async function resolveApiTenantContext(request: NextRequest): Promise<TenantCont
     roleKey: membership.role,
     permissions,
     isPlatformAdmin: session.user.role === "admin",
+    accessibleConnectionIds,
   };
 }
 

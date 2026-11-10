@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
 import { getConnectionSummary } from "@/repositories/channel-connection.repository";
+import { assertConnectionAccessOrNotFound } from "@/lib/rbac/connection-scope";
 import { getFlow } from "@/services/flow.service";
 import { isFlowGraph } from "@/lib/flow/types";
 import { FlowEditor } from "@/components/dashboard/whatsapp/fluxos/flow-editor";
@@ -21,6 +22,7 @@ export default async function FlowEditorPage({
 
   const connection = await getConnectionSummary(ctx.tenantId, connectionId);
   if (!connection) notFound();
+  assertConnectionAccessOrNotFound(ctx, connectionId);
 
   const flow = await getFlow(ctx.tenantId, flowId).catch(() => null);
   if (!flow || flow.connectionId !== connectionId) notFound();

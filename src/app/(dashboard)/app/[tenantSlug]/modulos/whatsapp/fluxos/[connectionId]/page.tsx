@@ -5,6 +5,7 @@ import { ArrowLeft } from "lucide-react";
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
 import { getConnectionSummary } from "@/repositories/channel-connection.repository";
+import { assertConnectionAccessOrNotFound } from "@/lib/rbac/connection-scope";
 import { listFlows } from "@/services/flow.service";
 import { FlowsList } from "@/components/dashboard/whatsapp/fluxos/flows-list";
 
@@ -22,6 +23,7 @@ export default async function FluxosConnectionPage({
 
   const connection = await getConnectionSummary(ctx.tenantId, connectionId);
   if (!connection) notFound();
+  assertConnectionAccessOrNotFound(ctx, connectionId);
 
   const flows = await listFlows(connectionId);
 

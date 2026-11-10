@@ -31,6 +31,7 @@ import {
   Undo2,
   FileText,
   ClipboardList,
+  Bot,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -67,6 +68,7 @@ const PALETTE: { type: FlowNodeType; label: string; icon: React.ReactNode; defau
   },
   { type: "form", label: "Formulário", icon: <FileText className="size-4" />, defaultData: { title: "", fields: [] } },
   { type: "end", label: "Fim", icon: <Square className="size-4" />, defaultData: { text: "" } },
+  { type: "ai", label: "IA / Atendente", icon: <Bot className="size-4" />, defaultData: {} },
 ];
 
 function toFlowNodes(graph: FlowGraph): Node[] {

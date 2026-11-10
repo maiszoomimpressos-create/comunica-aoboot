@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { defineTenantAction } from "@/lib/server/actions/define-tenant-action";
 import { upsertBotConfig } from "@/repositories/bot.repository";
+import { assertConnectionAccess } from "@/lib/rbac/connection-scope";
 
 const schema = z.object({
   connectionId: z.string().min(1),
@@ -13,8 +14,9 @@ const schema = z.object({
 
 export const updateBotConfigAction = defineTenantAction(
   "whatsapp.bot.manage",
-  async (_ctx, input: z.infer<typeof schema>) => {
+  async (ctx, input: z.infer<typeof schema>) => {
     const parsed = schema.parse(input);
+    assertConnectionAccess(ctx, parsed.connectionId);
     await upsertBotConfig(parsed.connectionId, {
       enabled: parsed.enabled,
       businessProfile: parsed.businessProfile,

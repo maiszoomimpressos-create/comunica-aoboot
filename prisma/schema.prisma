@@ -140,6 +140,7 @@ model Organization {
   contactLists          ContactList[]
   campaigns             Campaign[]
   setores               Setor[]
+  segmentos             Segmento[]
 
   @@index([status])
   @@map("organization")
@@ -203,10 +204,18 @@ model Role {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // false (default) = papel enxerga todas as conexões do tenant,
+  // RoleConnectionScope é ignorada. true = só as conexões listadas em
+  // connectionScopes, mesmo que a lista esteja vazia (estado intencional
+  // de "ainda não vejo nenhuma conexão") — ver require-permission.ts /
+  // connection-scope.ts pra por que isso não é "zero linhas = liberado".
+  connectionScopeEnabled Boolean @default(false)
+
   tenantId     String
   organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  rolePermissions RolePermission[]
+  rolePermissions  RolePermission[]
+  connectionScopes RoleConnectionScope[]
 
   @@unique([tenantId, key])
   @@index([tenantId])
@@ -222,6 +231,22 @@ model RolePermission {
 
   @@id([roleId, permissionId])
   @@map("role_permission")
+}
+
+// Conexões que um papel restrito pode acessar — só é lida quando
+// Role.connectionScopeEnabled = true (ver comentário no model Role).
+// Apagar a ChannelConnection apaga a linha junto (onDelete: Cascade), então
+// remover uma conexão nunca deixa um escopo "fantasma" nem aumenta acesso
+// de ninguém por engano.
+model RoleConnectionScope {
+  roleId String
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, connectionId])
+  @@map("role_connection_scope")
 }
 
 // =====================================================================
@@ -389,6 +414,12 @@ model ChannelConnection {
   id             String                  @id @default(cuid())
   connectionName String
   phoneNumber    String
+  // Nome exibido nas mensagens automáticas desta conexão (ex.: confirmação
+  // de compra) — sobrepõe Organization.messageBusinessName quando
+  // preenchido. Uma conta pode administrar várias conexões/clientes
+  // diferentes; esse campo deixa cada uma se identificar com seu próprio
+  // nome, em vez de herdar o nome de negócio da conta inteira.
+  businessName String?
   // Nulos enquanto a conexão está só "solicitada" (status PENDING) — o
   // tenant não digita mais isso, quem preenche é um admin da plataforma em
   // /admin/whatsapp (ver whatsapp-connection.service.ts: provisionConnection).
@@ -425,6 +456,13 @@ model ChannelConnection {
   // integração de ingresso já em produção; "balance_alert" é opt-in.
   enabledServices String[] @default(["purchase_confirmation"])
 
+  // Quais tipos de notificação (config/whatsapp-notification-types.ts) esta
+  // conexão pode disparar via sendPurchaseConfirmation — substitui o gate
+  // amplo por serviceKey só para os tipos que vivem dentro de
+  // purchase_confirmation/verification_code; balance_alert continua
+  // controlado só por enabledServices (não tem "tipos").
+  enabledNotificationTypes String[] @default(["compra_confirmada"])
+
   tenantId     String
   organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -453,9 +491,204 @@ model ChannelConnection {
   formSubmissions          FormSubmission[]
   knowledgeEntries         KnowledgeEntry[]
   knowledgeCorrections     KnowledgeCorrection[]
+  customNotificationTypes  CustomNotificationType[]
+  segmentos                Segmento[]
+  roleScopes               RoleConnectionScope[]
 
   @@index([tenantId, channelId])
   @@map("channel_connection")
+}
+
+enum SegmentoNiche {
+  EVENTOS_INGRESSOS
+  ESTACIONAMENTO
+  MOBILIDADE_CORRIDAS
+  GENERICO_2FA
+}
+
+// Rótulo de nicho de negócio que o tenant declara dentro da empresa — não é
+// a mesma coisa que ChannelConnection: um segmento sempre aponta pra UMA
+// conexão, mas uma conexão pode servir vários segmentos (ver "nova
+// instância" vs "instância existente" em create-segmento.ts). Acesso é
+// controlado pela conexão por baixo (ver Role.connectionScopeEnabled),
+// nunca pelo segmento em si — isolamento de dado real só existe por
+// connectionId.
+model Segmento {
+  id    String        @id @default(cuid())
+  name  String
+  niche SegmentoNiche
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId     String
+  organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([connectionId])
+  @@map("segmento")
+}
+
+// Tipo de notificação criado pelo próprio tenant (via "Funções" → "Criar
+// função personalizada") pra negócios fora do catálogo fixo de
+// whatsapp-notification-types.ts — campos e texto gerados por IA a partir
+// de uma descrição livre, revisáveis antes de salvar. Ver sendPurchaseConfirmation
+// em whatsapp-connection.service.ts pra como isso entra no envio real.
+// Estilo de saudação das funções personalizadas (CustomNotificationType /
+// FunctionTemplate) — FIXO é o "Olá, {nome}!" de sempre; HORARIO varia
+// Bom dia/Boa tarde/Boa noite conforme o horário de envio em
+// America/Sao_Paulo (ver buildGreeting em whatsapp-notification-types.ts).
+enum CustomGreetingStyle {
+  FIXO
+  HORARIO
+}
+
+// De onde vem o nome usado na saudação: o nome do perfil do WhatsApp da
+// pessoa (pode vir nulo/estranho) ou o nome cadastrado pelo sistema que
+// chama a API (`recipientName` — sempre preenchido, mais confiável).
+enum CustomGreetingNameSource {
+  PERFIL_WHATSAPP
+  CADASTRO
+}
+
+model CustomNotificationType {
+  id String @id @default(cuid())
+
+  // Slug gerado a partir do título (ex: "Corrida concluída MAI Drive" →
+  // corrida_concluida_mai_drive) — é o que o sistema externo manda em
+  // `type`. Editável na revisão antes de salvar, mas nunca depois de salvo.
+  key   String
+  label String
+
+  // O texto livre original digitado pelo tenant — vira a "descrição"
+  // mostrada no painel de Funções, mesmo papel do `description` do
+  // catálogo fixo.
+  description String
+
+  // Array de {key, label, description?, required?} extraído pela IA a
+  // partir da descrição — `required` ausente/true = obrigatório (igual ao
+  // comportamento antigo, antes de campo opcional existir); `false` = a
+  // linha correspondente no messageTemplate some quando o valor não vier
+  // (mesmo tratamento dos campos opcionais do catálogo fixo).
+  fields Json
+
+  // Corpo da mensagem com {{campo}} como placeholder — NÃO inclui
+  // saudação; isso é sempre prefixado automaticamente no envio (ver
+  // buildGreeting em whatsapp-notification-types.ts). `{{nome_empresa}}` é
+  // um placeholder reservado: resolvido automaticamente a partir da
+  // conexão, não precisa ser declarado em `fields`.
+  messageTemplate String
+
+  greetingStyle      CustomGreetingStyle      @default(FIXO)
+  greetingNameSource CustomGreetingNameSource @default(PERFIL_WHATSAPP)
+
+  requiresQr Boolean @default(false)
+
+  // Soft-delete: preenchido na exclusão. O registro permanece no banco
+  // para sempre; some da lista e deixa de ser disparável.
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, key])
+  @@map("custom_notification_type")
+}
+
+// Catálogo global de funções mantido pelo Super Admin (/admin/whatsapp) —
+// diferente de CustomNotificationType (por conexão, criado pelo tenant),
+// este é o mesmo pra toda a plataforma: o admin cadastra uma vez ("Corrida
+// concluída") e qualquer tenant de qualquer empresa pode escolher esse card
+// ao montar as Funções da conexão dele, em vez de descrever do zero pra IA.
+// Mesmo formato de campos/template de CustomNotificationType de propósito —
+// na hora de "adotar" um FunctionTemplate, o tenant só recebe uma cópia
+// pré-preenchida (vira um CustomNotificationType normal da conexão dele,
+// editável depois sem afetar o template original).
+model FunctionTemplate {
+  id String @id @default(cuid())
+
+  // Slug curto, único na plataforma — é o `key` sugerido quando o tenant
+  // adota esse template (pode ser editado na cópia dele, igual ao draft de
+  // IA já permite).
+  key         String  @unique
+  label       String
+  description String
+
+  // Mesmo formato de CustomNotificationType.fields: array de {key, label,
+  // description?, required?} — ver comentário lá pro significado de
+  // `required`.
+  fields          Json
+  messageTemplate String
+
+  greetingStyle      CustomGreetingStyle      @default(FIXO)
+  greetingNameSource CustomGreetingNameSource @default(PERFIL_WHATSAPP)
+
+  requiresQr Boolean @default(false)
+
+  // Nicho(s) de negócio sugeridos pra este template (ver SegmentoNiche) —
+  // puramente pra ordenar/destacar na tela do tenant, igual ao campo
+  // `niches` do catálogo fixo em whatsapp-notification-types.ts. Vazio =
+  // genérico, aparece pra qualquer nicho.
+  niches SegmentoNiche[]
+
+  active    Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("function_template")
+}
+
+// Biblioteca de "pedaços" de campo prontos, curada só pelo Super Admin —
+// cada um é um único dado (ex: "valor", "nome do motorista") com a linha de
+// mensagem já pronta. Existe pra evitar que cada tenant precise descrever
+// pra IA (ou digitar na mão) os mesmos campos comuns toda vez que cria uma
+// função personalizada: no formulário de criação, o tenant marca quais
+// pedaços quer, e o sistema já monta fields+messageTemplate sozinho, sem
+// chamar IA — cai na mesma tela de revisão de sempre, onde ele ainda pode
+// editar tudo antes de salvar (ver create-custom-notification-type-form.tsx).
+// Depois de montado, vira um CustomNotificationType normal — editável sem
+// nenhum vínculo de volta com os pedaços usados (mesmo modelo "compõe uma
+// vez" do FunctionTemplate, não uma referência viva).
+model NotificationFieldBlock {
+  id String @id @default(cuid())
+
+  // snake_case, único na plataforma — é a {{chave}} usada em `messageLine`.
+  key   String @unique
+  label String
+
+  // Linha de mensagem pronta pra esse campo (ex: "💰 Valor: {{valor}}") —
+  // DEVE referenciar `{{key}}` dentro do texto; validado na criação/edição
+  // (ver notification-field-block.service.ts).
+  messageLine String
+
+  // Legenda curta opcional explicando o pedaço — mostrada no checklist do
+  // tenant, mesmo papel do `description` por campo de CustomNotificationField.
+  description String?
+
+  // Se marcado por padrão como obrigatório ao ser selecionado — o tenant
+  // ainda pode mudar na revisão antes de salvar, igual a qualquer campo.
+  defaultRequired Boolean @default(true)
+
+  // Nicho(s) sugeridos — puramente pra agrupar/destacar no checklist do
+  // tenant, mesmo princípio de FunctionTemplate.niches. Vazio = genérico,
+  // aparece em qualquer grupo.
+  niches SegmentoNiche[]
+
+  active    Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("notification_field_block")
 }
 
 // Log bruto dos eventos recebidos via webhook (mensagem recebida, status de
@@ -506,9 +739,9 @@ model Contact {
   id             String    @id @default(cuid())
   phone          String
   name           String?
-  // "sync" = capturado da agenda do WhatsApp conectado — única origem
-  // suportada por enquanto (import por CSV/cadastro manual ficam para uma
-  // fase futura, ver plano do módulo de campanhas).
+  // "sync" = capturado da agenda do WhatsApp conectado; "import" = veio de
+  // um CSV importado (ver importContactsFromCsv). Cadastro manual
+  // avulso continua fora de escopo.
   source         String    @default("sync")
   optedOut       Boolean   @default(false)
   optedOutAt     DateTime?
