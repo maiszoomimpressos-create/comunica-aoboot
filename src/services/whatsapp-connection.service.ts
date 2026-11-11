@@ -51,6 +51,7 @@ import { handleInboundMessage } from "./bot-attendant.service";
 import { tryClaimInboundMessage } from "@/repositories/bot.repository";
 import { tryHandleRelayMessage } from "@/services/relay-session.service";
 import { tryHandleFlowMessage } from "@/services/flow-engine.service";
+import { interceptAutomaticReply } from "@/services/anti-loop.service";
 import { logBotEvent, serializeError } from "@/lib/logging/bot-attendant-logger";
 import {
   ConflictError,
@@ -532,6 +533,7 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
 
   const fromPhone = payload.phone;
   if (typeof fromPhone !== "string") return;
+  const chatLid = typeof payload.chatLid === "string" && payload.chatLid.trim() ? payload.chatLid.trim() : null;
 
   // `chatName`, não `senderName` — confirmado contra payloads reais que
   // `senderName` vem com o nome da própria conta conectada (não do
@@ -564,6 +566,18 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
   // antes dos branches texto/áudio normais de baixo.
   const relayHandled = await tryHandleRelayMessage({ connectionId, fromPhone, customerName, text: bodyText });
   if (relayHandled) return;
+
+  // Proteção anti-loop (ver anti-loop.service.ts): se este contato já foi
+  // identificado como robô, ou se estourou o teto de respostas por minuto,
+  // não deixa cair no fluxo nem na IA. A pausa persistente reusa uma
+  // RelaySession PENDING no setor interno "Pausa automática (sistema)".
+  const antiLoop = await interceptAutomaticReply({
+    connectionId,
+    fromPhone,
+    customerName,
+    chatLid,
+  });
+  if (antiLoop.skip) return;
 
   // Fluxo visual (ver flow-engine.service.ts): só intercepta quando esta
   // conexão tem um Flow PUBLISHED — senão retorna "not_applicable" e cai

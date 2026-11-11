@@ -3,13 +3,15 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { getRequestContext } from "@/lib/server/request-context";
-import { requirePermission } from "@/lib/rbac/require-permission";
+import { hasPermission, requirePermission } from "@/lib/rbac/require-permission";
 import { getConnectionSummary } from "@/repositories/channel-connection.repository";
 import { assertConnectionAccessOrNotFound } from "@/lib/rbac/connection-scope";
 import { getBotConfig } from "@/repositories/bot.repository";
 import { listActiveBotVerticals } from "@/repositories/bot-vertical.repository";
 import { Card } from "@/components/ui/card";
 import { BotAttendantSection } from "@/components/dashboard/whatsapp/bot-attendant-section";
+import { listPausedAutomaticReplies } from "@/services/anti-loop.service";
+import { PausedContactsPanel } from "@/components/dashboard/whatsapp/paused-contacts-panel";
 
 export const metadata: Metadata = { title: "Atendente de IA" };
 
@@ -27,9 +29,11 @@ export default async function AtendenteIaConnectionPage({
   if (!connection) notFound();
   assertConnectionAccessOrNotFound(ctx, connectionId);
 
-  const [botConfig, verticals] = await Promise.all([
+  const canManageBot = hasPermission(ctx, "whatsapp.bot.manage");
+  const [botConfig, verticals, pausedContacts] = await Promise.all([
     getBotConfig(connectionId),
     listActiveBotVerticals(),
+    listPausedAutomaticReplies(connectionId),
   ]);
 
   return (
@@ -58,6 +62,15 @@ export default async function AtendenteIaConnectionPage({
           defaultBusinessProfile={botConfig?.businessProfile ?? null}
           defaultVerticalId={botConfig?.verticalId ?? null}
           verticals={verticals}
+        />
+      </Card>
+
+      <Card className="p-6">
+        <PausedContactsPanel
+          tenantSlug={tenantSlug}
+          connectionId={connectionId}
+          canManage={canManageBot}
+          items={pausedContacts}
         />
       </Card>
     </div>

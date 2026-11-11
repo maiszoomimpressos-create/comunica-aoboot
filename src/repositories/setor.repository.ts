@@ -1,11 +1,12 @@
 import { prisma } from "@/lib/db/prisma";
+import { AUTO_PAUSE_SETOR_NAME } from "@/lib/whatsapp/anti-loop";
 
 /** Tenant-facing — lista completa (ativos e inativos) pra tela de gestão em
  * .../modulos/whatsapp/setores/[connectionId], com o pool de atendentes de
  * cada um. */
 export function listSetoresForConnection(connectionId: string) {
   return prisma.setor.findMany({
-    where: { connectionId },
+    where: { connectionId, name: { not: AUTO_PAUSE_SETOR_NAME } },
     orderBy: { sortOrder: "asc" },
     include: { attendants: { orderBy: { sortOrder: "asc" } } },
   });

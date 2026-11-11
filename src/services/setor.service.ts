@@ -8,6 +8,7 @@ import {
   type SetorAttendantInput,
 } from "@/repositories/setor.repository";
 import { ValidationError, NotFoundError, ConflictError } from "@/lib/server/errors";
+import { AUTO_PAUSE_SETOR_NAME } from "@/lib/whatsapp/anti-loop";
 
 const PHONE_DIGITS_ONLY = /^\d{10,}$/;
 
@@ -17,6 +18,12 @@ export interface SetorFormInput {
   attendants: SetorAttendantInput[];
 }
 
+
+function assertNotSystemSetor(setor: { name: string }, nextName?: string) {
+  if (setor.name === AUTO_PAUSE_SETOR_NAME || nextName === AUTO_PAUSE_SETOR_NAME) {
+    throw new ValidationError("Este setor é interno do sistema e não pode ser alterado.");
+  }
+}
 function validateSetorInput(input: SetorFormInput) {
   if (!input.name.trim()) throw new ValidationError("Informe o nome do setor.");
   if (input.attendants.length === 0) throw new ValidationError("Adicione ao menos um número de atendente.");
@@ -43,6 +50,9 @@ export async function getSetorConnectionId(tenantId: string, setorId: string): P
 
 export async function createSetor(tenantId: string, connectionId: string, input: SetorFormInput) {
   validateSetorInput(input);
+  if (input.name.trim() === AUTO_PAUSE_SETOR_NAME) {
+    throw new ValidationError("Este nome é reservado para um setor interno do sistema.");
+  }
   return createSetorRecord(tenantId, connectionId, {
     name: input.name.trim(),
     description: input.description?.trim() || null,
@@ -54,6 +64,7 @@ export async function updateSetor(tenantId: string, setorId: string, input: Seto
   validateSetorInput(input);
   const existing = await findSetorForTenant(tenantId, setorId);
   if (!existing) throw new NotFoundError("Setor não encontrado.");
+  assertNotSystemSetor(existing, input.name.trim());
   return updateSetorRecord(setorId, {
     name: input.name.trim(),
     description: input.description?.trim() || null,
@@ -64,6 +75,7 @@ export async function updateSetor(tenantId: string, setorId: string, input: Seto
 export async function setSetorActive(tenantId: string, setorId: string, active: boolean) {
   const existing = await findSetorForTenant(tenantId, setorId);
   if (!existing) throw new NotFoundError("Setor não encontrado.");
+  assertNotSystemSetor(existing);
   return updateSetorRecord(setorId, { active });
 }
 
@@ -74,6 +86,7 @@ export async function setSetorActive(tenantId: string, setorId: string, active: 
 export async function deleteSetor(tenantId: string, setorId: string) {
   const existing = await findSetorForTenant(tenantId, setorId);
   if (!existing) throw new NotFoundError("Setor não encontrado.");
+  assertNotSystemSetor(existing);
   const liveSessions = await countLiveRelaySessionsForSetor(setorId);
   if (liveSessions > 0) {
     throw new ConflictError("Não é possível excluir: há um atendimento em andamento neste setor.");
