@@ -52,6 +52,7 @@ import { tryClaimInboundMessage } from "@/repositories/bot.repository";
 import { tryHandleRelayMessage } from "@/services/relay-session.service";
 import { tryHandleFlowMessage } from "@/services/flow-engine.service";
 import { interceptAutomaticReply } from "@/services/anti-loop.service";
+import { interceptAckReplyAfterNotification, recordNotificationSent } from "@/services/ack-silence.service";
 import { logBotEvent, serializeError } from "@/lib/logging/bot-attendant-logger";
 import {
   ConflictError,
@@ -579,6 +580,20 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
   });
   if (antiLoop.skip) return;
 
+  // Silêncio pós-notificação (ver ack-silence.service.ts): resposta que é só
+  // "obrigado"/"bom dia"/"ok"/emoji/figurinha a uma notificação automática
+  // recente (6h) não abre fluxo nem IA. A mensagem continua gravada no
+  // webhook_event (createWebhookEvent acima) como qualquer outra.
+  const reactionValue = isRecord(payload.reaction) ? payload.reaction.value : undefined;
+  const hasAudio = isRecord(payload.audio);
+  const ackSilence = await interceptAckReplyAfterNotification({
+    connectionId,
+    fromPhone,
+    text: bodyText ?? (typeof reactionValue === "string" ? reactionValue : null),
+    nonTextAck: !bodyText && !hasAudio && isRecord(payload.sticker) ? "sticker" : null,
+  });
+  if (ackSilence.skip) return;
+
   // Fluxo visual (ver flow-engine.service.ts): só intercepta quando esta
   // conexão tem um Flow PUBLISHED — senão retorna "not_applicable" e cai
   // pro atendente de IA normalmente, exatamente como hoje. Entra depois do
@@ -763,12 +778,21 @@ export async function sendPurchaseConfirmation(
       )}`;
   const message = input.note?.trim() ? `${baseMessage}\n\n${input.note.trim()}` : baseMessage;
 
-  if (input.qrData) {
-    const qrImage = await QRCode.toDataURL(input.qrData);
-    return provider.sendImage(config, input.to, qrImage, message);
-  }
+  const result = input.qrData
+    ? await provider.sendImage(config, input.to, await QRCode.toDataURL(input.qrData), message)
+    : await provider.sendMessage(config, input.to, message);
 
-  return provider.sendMessage(config, input.to, message);
+  // Marca o envio (AuditLog, sem migração) pro silêncio pós-notificação -
+  // ver ack-silence.service.ts. Best-effort, nunca lança.
+  await recordNotificationSent({
+    connectionId: connection.id,
+    tenantId: connection.tenantId,
+    to: input.to,
+    notificationType: resolvedKey,
+    result,
+  });
+
+  return result;
 }
 
 export interface BalanceAlertInput {
@@ -819,6 +843,16 @@ export async function sendBalanceAlert(
     : "⚠️ *Saldo baixo*. Verifique sua carteira.";
 
   return Promise.all(
-    connection.balanceAlertPhones.map((phone) => provider.sendMessage(config, phone, message))
+    connection.balanceAlertPhones.map(async (phone) => {
+      const result = await provider.sendMessage(config, phone, message);
+      await recordNotificationSent({
+        connectionId: connection.id,
+        tenantId: connection.tenantId,
+        to: phone,
+        notificationType: "balance_alert",
+        result,
+      });
+      return result;
+    })
   );
 }
