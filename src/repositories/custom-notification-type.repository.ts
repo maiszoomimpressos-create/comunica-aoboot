@@ -1,47 +1,72 @@
 import { prisma } from "@/lib/db/prisma";
 import type { Prisma, CustomGreetingStyle, CustomGreetingNameSource } from "@/generated/prisma/client";
+import {
+  parseCustomFunctionAiHistory,
+  type CustomFunctionAiHistoryEntry,
+} from "@/lib/notifications/custom-function-history";
 
 import type { CustomNotificationField } from "@/lib/notifications/custom-message";
 export type { CustomNotificationField, FieldValueType } from "@/lib/notifications/custom-message";
+export type { CustomFunctionAiHistoryEntry } from "@/lib/notifications/custom-function-history";
 
 /**
  * `fields` JSON is either a plain CustomNotificationField[] (legacy rows)
- * or `{ fields, aiDescription }` so the original "Descrever com IA" text
- * can be stored without a new column. Callers always receive a decoded
- * array plus `aiDescription`. Existing array-only rows are left as-is
- * until they are saved again with an AI prompt.
+ * or `{ fields, aiDescription?, history? }` so the original "Descrever com IA"
+ * text and later AI add/edit requests can be stored without a new column.
+ * Callers always receive a decoded array plus `aiDescription` and `history`.
+ * Existing rows are left as-is until they are saved again with a prompt or
+ * a confirmed AI request — listing/hydrate never writes back.
  */
 export type StoredCustomFields =
   | CustomNotificationField[]
-  | { fields: CustomNotificationField[]; aiDescription?: string };
+  | {
+      fields: CustomNotificationField[];
+      aiDescription?: string;
+      history?: CustomFunctionAiHistoryEntry[];
+    };
 
 export function parseStoredCustomFields(raw: unknown): {
   fields: CustomNotificationField[];
   aiDescription: string | null;
+  history: CustomFunctionAiHistoryEntry[];
 } {
   if (Array.isArray(raw)) {
-    return { fields: raw as CustomNotificationField[], aiDescription: null };
+    return { fields: raw as CustomNotificationField[], aiDescription: null, history: [] };
   }
   if (raw && typeof raw === "object" && Array.isArray((raw as { fields?: unknown }).fields)) {
-    const stored = raw as { fields: CustomNotificationField[]; aiDescription?: unknown };
+    const stored = raw as {
+      fields: CustomNotificationField[];
+      aiDescription?: unknown;
+      history?: unknown;
+    };
     const text = typeof stored.aiDescription === "string" ? stored.aiDescription.trim() : "";
-    return { fields: stored.fields, aiDescription: text || null };
+    return {
+      fields: stored.fields,
+      aiDescription: text || null,
+      history: parseCustomFunctionAiHistory(stored.history),
+    };
   }
-  return { fields: [], aiDescription: null };
+  return { fields: [], aiDescription: null, history: [] };
 }
 
 export function encodeStoredCustomFields(
   fields: CustomNotificationField[],
-  aiDescription?: string | null
+  aiDescription?: string | null,
+  history?: CustomFunctionAiHistoryEntry[] | null
 ): Prisma.InputJsonValue {
   const text = aiDescription?.trim() ?? "";
-  if (!text) return fields as unknown as Prisma.InputJsonValue;
-  return { fields, aiDescription: text } as unknown as Prisma.InputJsonValue;
+  const entries = history && history.length > 0 ? history : null;
+  if (!text && !entries) return fields as unknown as Prisma.InputJsonValue;
+  return {
+    fields,
+    ...(text ? { aiDescription: text } : {}),
+    ...(entries ? { history: entries } : {}),
+  } as unknown as Prisma.InputJsonValue;
 }
 
 function hydrateCustomNotificationType<T extends { fields: unknown }>(row: T) {
   const parsed = parseStoredCustomFields(row.fields);
-  return { ...row, fields: parsed.fields, aiDescription: parsed.aiDescription };
+  return { ...row, fields: parsed.fields, aiDescription: parsed.aiDescription, history: parsed.history };
 }
 
 /**
@@ -107,28 +132,37 @@ export function createCustomNotificationType(
   }).then((row) => hydrateCustomNotificationType(row));
 }
 
+export type UpdateCustomNotificationTypeData = {
+  label: string;
+  description: string;
+  fields: CustomNotificationField[];
+  aiDescription?: string | null;
+  history?: CustomFunctionAiHistoryEntry[];
+  messageTemplate: string;
+  requiresQr: boolean;
+  greetingStyle: CustomGreetingStyle;
+  greetingNameSource: CustomGreetingNameSource;
+};
+
 /** `key` nunca muda depois de criado (é o que o sistema externo já está
  * mandando em `type`) — só label/description/fields/template/requiresQr são
  * editáveis. Scoped por connectionId no próprio `where`, igual a
- * deleteSegmento/renameList — nunca edita a função de outra conexão. */
-export function updateCustomNotificationType(
+ * deleteSegmento/renameList — nunca edita a função de outra conexão.
+ * Se o caller não mandar `history` ou `aiDescription`, o valor já gravado
+ * é preservado — uma edição manual não apaga o histórico de pedidos à IA. */
+export async function updateCustomNotificationType(
   connectionId: string,
   key: string,
-  data: {
-    label: string;
-    description: string;
-    fields: CustomNotificationField[];
-    aiDescription?: string | null;
-    messageTemplate: string;
-    requiresQr: boolean;
-    greetingStyle: CustomGreetingStyle;
-    greetingNameSource: CustomGreetingNameSource;
-  }
+  data: UpdateCustomNotificationTypeData
 ) {
-  const { aiDescription, fields, ...rest } = data;
+  const current = await getCustomNotificationTypeByKey(connectionId, key);
+  if (!current) return { count: 0 };
+  const { aiDescription, fields, history, ...rest } = data;
+  const nextAi = aiDescription !== undefined ? aiDescription : current.aiDescription;
+  const nextHistory = history !== undefined ? history : current.history;
   return prisma.customNotificationType.updateMany({
     where: { connectionId, key, ...activeCustomNotificationTypeWhere },
-    data: { ...rest, fields: encodeStoredCustomFields(fields, aiDescription) },
+    data: { ...rest, fields: encodeStoredCustomFields(fields, nextAi, nextHistory) },
   });
 }
 

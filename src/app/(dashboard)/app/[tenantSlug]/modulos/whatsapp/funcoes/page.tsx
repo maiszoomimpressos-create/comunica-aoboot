@@ -77,6 +77,8 @@ export default async function FuncoesPage({
                 greetingStyle: c.greetingStyle,
                 greetingNameSource: c.greetingNameSource,
                 aiDescription: c.aiDescription,
+                history: c.history,
+                createdAt: c.createdAt.toISOString(),
               }))}
             />
           ))}

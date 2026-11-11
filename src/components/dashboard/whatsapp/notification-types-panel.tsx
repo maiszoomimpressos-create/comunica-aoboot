@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Pencil, X, ChevronUp, ChevronDown, ChevronRight, Copy, Trash2, Sparkles } from "lucide-react";
+import { Pencil, Plus, X, ChevronUp, ChevronDown, ChevronRight, Copy, Trash2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -46,7 +46,10 @@ import { createCustomNotificationTypeAction } from "@/actions/whatsapp/create-cu
 import { deleteCustomNotificationTypeAction } from "@/actions/whatsapp/delete-custom-notification-type";
 import { generateCustomNotificationTypeDraftAction } from "@/actions/whatsapp/generate-custom-notification-type-draft";
 import { CreateCustomNotificationTypeForm } from "./create-custom-notification-type-form";
-import { CollapsibleAiDescription, resolveAiDescription } from "./ai-request-text";
+import { resolveAiDescription } from "./ai-request-text";
+import { CustomFunctionRequestHistory } from "./custom-function-ai-history";
+import { CustomFunctionAiPatchPanel } from "./custom-function-ai-patch-panel";
+import type { CustomFunctionAiHistoryEntry } from "@/lib/notifications/custom-function-history";
 import { groupCustomTypesByKind } from "@/lib/notifications/custom-function-kind";
 
 // Agrupa o catálogo (já filtrado por nicho, ver groupByService abaixo) por
@@ -84,6 +87,8 @@ export interface CustomNotificationTypeSummary {
   greetingStyle: CustomGreetingStyle;
   greetingNameSource: CustomGreetingNameSource;
   aiDescription?: string | null;
+  history?: CustomFunctionAiHistoryEntry[];
+  createdAt?: string | Date;
 }
 
 const GREETING_STYLE_OPTIONS: { value: CustomGreetingStyle; label: string }[] = [
@@ -168,6 +173,7 @@ export function NotificationTypesPanel({
   const [editingCustom, setEditingCustom] = useState<CustomNotificationTypeSummary | null>(null);
   const [duplicatingCustom, setDuplicatingCustom] = useState<CustomNotificationTypeSummary | null>(null);
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
+  const [aiPatchTarget, setAiPatchTarget] = useState<{ id: string; mode: "adicionar" | "editar" } | null>(null);
   // O formulário de criação lê o rascunho do sessionStorage no primeiro render;
   // só monta depois da hidratação pra o HTML do servidor e do navegador baterem.
   const [mounted, setMounted] = useState(false);
@@ -232,6 +238,7 @@ export function NotificationTypesPanel({
       ...customTypes.map((c) => c.key),
     ]);
     setEditingCustom(null);
+    setAiPatchTarget(null);
     setDuplicatingCustom({
       ...type,
       key: nextCopyKey(type.key, taken),
@@ -465,11 +472,36 @@ export function NotificationTypesPanel({
                                 size="sm"
                                 onClick={() => {
                                   setDuplicatingCustom(null);
+                                  setEditingCustom(null);
+                                  setAiPatchTarget({ id: type.id, mode: "adicionar" });
+                                }}
+                              >
+                                <Plus className="size-3.5" />
+                                Adicionar
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setDuplicatingCustom(null);
+                                  setEditingCustom(null);
+                                  setAiPatchTarget({ id: type.id, mode: "editar" });
+                                }}
+                              >
+                                <Sparkles className="size-3.5" />
+                                Editar
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  setAiPatchTarget(null);
+                                  setDuplicatingCustom(null);
                                   setEditingCustom(type);
                                 }}
                               >
                                 <Pencil className="size-3.5" />
-                                Editar
+                                Edição manual
                               </Button>
                               <Button variant="outline" size="sm" onClick={() => startDuplicate(type)}>
                                 <Copy className="size-3.5" />
@@ -486,7 +518,33 @@ export function NotificationTypesPanel({
                               </Button>
                             </div>
                           </div>
-                          <CollapsibleAiDescription text={resolveAiDescription(type.aiDescription, type.description)} />
+                          {aiPatchTarget?.id === type.id && (
+                            <CustomFunctionAiPatchPanel
+                              tenantSlug={tenantSlug}
+                              connectionId={connectionId}
+                              type={type}
+                              mode={aiPatchTarget.mode}
+                              onClose={() => setAiPatchTarget(null)}
+                              onApplied={() => {
+                                setAiPatchTarget(null);
+                                router.refresh();
+                              }}
+                              onOpenManualEdit={
+                                aiPatchTarget.mode === "editar"
+                                  ? () => {
+                                      setAiPatchTarget(null);
+                                      setDuplicatingCustom(null);
+                                      setEditingCustom(type);
+                                    }
+                                  : undefined
+                              }
+                            />
+                          )}
+                          <CustomFunctionRequestHistory
+                            creationText={resolveAiDescription(type.aiDescription, type.description)}
+                            createdAt={type.createdAt}
+                            history={type.history}
+                          />
                           <div>
                             <p className="text-xs font-medium text-muted-foreground">Texto da mensagem</p>
                             <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-background p-3 text-sm text-foreground">
