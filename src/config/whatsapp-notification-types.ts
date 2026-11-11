@@ -291,29 +291,48 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   {
     key: "corrida_concluida",
     label: "Corrida concluída (resumo pro passageiro)",
-    description: "Manda um resumo da corrida (horário, distância, tarifa, motorista, valor e forma de pagamento) quando ela termina.",
+    description: "Manda um resumo da corrida (distância e valor total, mais horário, tarifa, motorista e forma de pagamento quando vierem) quando ela termina.",
     requiresQr: false,
     // Disparado pelo app de corridas (MAI Drive) ao finalizar a viagem —
     // mesmo número do passageiro já capturado no início da corrida.
-    // `link_tarifas` é opcional (mesmo tratamento de opcional que
-    // formatLocation/formatEventDateTime): a página de tarifas da tipo7
-    // ainda está em desenvolvimento, então a linha simplesmente some
-    // enquanto o campo não for enviado, sem quebrar a notificação.
-    requiredDetailKeys: ["horario", "distancia", "tarifa", "motorista", "valor_total", "forma_pagamento"],
+    // Só `distancia` e `valor_total` são obrigatórios (compatível com o
+    // payload original do MAI Drive). Todo o resto é opcional e a linha
+    // some quando o campo não vier ou vier vazio: inicio, fim, duracao,
+    // origem, destino, tarifa, hora_parada, valor_corrida, taxa_pagamento,
+    // motorista, horario, forma_pagamento, link_tarifas.
+    requiredDetailKeys: ["distancia", "valor_total"],
     serviceKey: "purchase_confirmation",
     niches: ["MOBILIDADE_CORRIDAS"],
     buildMessage: ({ whatsappName, recipientName, businessName, details }) => {
+      const opt = (key: string) => details[key]?.trim() ?? "";
       const lines = [
         buildGreeting({ style: "HORARIO", nameSource: "CADASTRO", whatsappName, recipientName }),
         "",
         `Sua corrida com a ${bold(businessName)} foi concluída! Agradecemos por ter escolhido a nossa empresa.`,
         "",
-        `🕒 Horário: ${details.horario}`,
-        `📍 Distância percorrida: ${details.distancia}`,
-        `💲 Tarifa aplicada: ${details.tarifa}`,
       ];
-      if (details.link_tarifas?.trim()) lines.push(`🔗 Entenda nossas tarifas: ${details.link_tarifas}`);
-      lines.push("", `🚗 Motorista: ${details.motorista}`, `💰 Valor da corrida: ${bold(details.valor_total)} (${details.forma_pagamento})`);
+      const push = (label: string, key: string) => {
+        const value = opt(key);
+        if (value) lines.push(`${label}: ${value}`);
+      };
+      push("🕒 Horário", "horario");
+      push("Início", "inicio");
+      push("Fim", "fim");
+      push("Duração", "duracao");
+      lines.push(`📍 Distância percorrida: ${details.distancia.trim()}`);
+      push("Origem", "origem");
+      push("Destino", "destino");
+      push("💲 Tarifa aplicada", "tarifa");
+      push("🔗 Entenda nossas tarifas", "link_tarifas");
+      push("Hora parada", "hora_parada");
+      push("🚗 Motorista", "motorista");
+      push("Valor da corrida", "valor_corrida");
+      push("Taxa da forma de pagamento", "taxa_pagamento");
+      const pagamento = opt("forma_pagamento");
+      lines.push(
+        "",
+        `💰 Valor total: ${bold(details.valor_total.trim())}${pagamento ? ` (${pagamento})` : ""}`
+      );
       return lines.join("\n");
     },
   },
