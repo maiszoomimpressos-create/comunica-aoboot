@@ -1,3 +1,4 @@
+import { isMissingDetailValue } from "./detail-value";
 import { buildGreeting, type GreetingStyle, type GreetingNameSource, type NotificationDetails } from "@/config/whatsapp-notification-types";
 
 export const FIELD_VALUE_TYPES = ["texto", "numero", "moeda", "data_hora"] as const;
@@ -137,9 +138,11 @@ export function renderCustomMessageTemplate(
   const optionalKeys = new Set(fields.filter((f) => f.required === false).map((f) => f.key));
   const lines = normalizeTemplateNewlines(messageTemplate).split("\n").filter((line) => {
     const refs = [...line.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]);
-    return !refs.some((key) => optionalKeys.has(key) && !values[key]?.trim());
+    return !refs.some((key) => optionalKeys.has(key) && isMissingDetailValue(values[key]));
   });
-  return lines.map((line) => line.replace(/\{\{(\w+)\}\}/g, (_, key: string) => values[key] ?? "")).join("\n");
+  const rendered = lines.map((line) => line.replace(/\{\{(\w+)\}\}/g, (_, key: string) => values[key]?.trim() ?? "")).join("\n");
+  // Linhas opcionais removidas podem deixar linhas em branco seguidas; junta numa só.
+  return rendered.replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, "\n\n").trim();
 }
 
 const BOLD_LABEL_RE = /\*[^*\n]+:\*/;

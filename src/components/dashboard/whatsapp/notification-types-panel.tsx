@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Pencil, X, ChevronUp, ChevronDown, Copy, Trash2, Sparkles } from "lucide-react";
+import { Pencil, X, ChevronUp, ChevronDown, ChevronRight, Copy, Trash2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -172,6 +172,16 @@ export function NotificationTypesPanel({
   // só monta depois da hidratação pra o HTML do servidor e do navegador baterem.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
+  // Cada função salva começa recolhida (só o rótulo); clicar no rótulo expande/recolhe.
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+  function toggleExpanded(id: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   // Narrowed by niche quando a conexão tem Segmento(s) — mas nunca esconde
   // um tipo já habilitado antes (pode ter sido ligado num nicho diferente
@@ -411,68 +421,111 @@ export function NotificationTypesPanel({
                   {group.items.map((type) => (
                     <div
                       key={type.id}
-                      className={cn(
-                        "flex flex-col gap-2 px-3 py-2",
-                        selectedKey === type.key && "bg-muted/50"
-                      )}
+                      className={cn(selectedKey === type.key && "bg-muted/50")}
                     >
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex items-center gap-2 px-3 py-2">
                         <Checkbox
                           checked={types.includes(type.key)}
                           onCheckedChange={(checked) => toggle(type.key, checked === true)}
-                          aria-label={`Habilitar ${type.label} nesta conexão`}
+                          aria-label={"Habilitar " + type.label + " nesta conexão"}
                         />
                         <button
                           type="button"
-                          onClick={() => setSelectedKey(type.key)}
-                          className="min-w-0 flex-1 text-left"
+                          id={"custom-fn-trigger-" + type.id}
+                          aria-expanded={expandedIds.has(type.id)}
+                          aria-controls={"custom-fn-panel-" + type.id}
+                          onClick={() => {
+                            toggleExpanded(type.id);
+                            setSelectedKey(type.key);
+                          }}
+                          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
-                          <span className="block truncate text-sm font-medium text-foreground">{type.label}</span>
-                          <code className="text-xs text-muted-foreground">{type.key}</code>
+                          <ChevronRight
+                            aria-hidden="true"
+                            className={cn(
+                              "size-4 shrink-0 text-muted-foreground transition-transform",
+                              expandedIds.has(type.id) && "rotate-90"
+                            )}
+                          />
+                          <span className="truncate text-sm font-medium text-foreground">{type.label}</span>
                         </button>
-                        <div className="flex flex-wrap gap-1">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setDuplicatingCustom(null);
-                              setEditingCustom(type);
-                            }}
-                          >
-                            <Pencil className="size-3.5" />
-                            Editar
-                          </Button>
-                          <Button variant="outline" size="sm" onClick={() => startDuplicate(type)}>
-                            <Copy className="size-3.5" />
-                            Duplicar
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleDelete(type)}
-                            disabled={deletingKey === type.key}
-                          >
-                            <Trash2 className="size-3.5" />
-                            {deletingKey === type.key ? "Excluindo…" : "Excluir"}
-                          </Button>
-                        </div>
                       </div>
-                      <CollapsibleAiDescription text={resolveAiDescription(type.aiDescription, type.description)} />
-                      <CustomNotificationTestSend
-                        id={`saved-${type.id}`}
-                        tenantSlug={tenantSlug}
-                        connectionId={connectionId}
-                        messageTemplate={type.messageTemplate}
-                        fields={type.fields}
-                        greetingStyle={type.greetingStyle}
-                        greetingNameSource={type.greetingNameSource}
-                      />
-                      <CustomNotificationDeveloperInstructions
-                        typeKey={type.key}
-                        typeLabel={type.label}
-                        fields={type.fields}
-                        requiresQr={type.requiresQr}
-                      />
+                      {expandedIds.has(type.id) && (
+                        <div
+                          id={"custom-fn-panel-" + type.id}
+                          role="region"
+                          aria-labelledby={"custom-fn-trigger-" + type.id}
+                          className="space-y-3 border-t border-border/60 bg-muted/20 px-4 pb-4 pt-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <code className="text-xs text-muted-foreground">{type.key}</code>
+                            <div className="flex flex-wrap gap-1">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setDuplicatingCustom(null);
+                                  setEditingCustom(type);
+                                }}
+                              >
+                                <Pencil className="size-3.5" />
+                                Editar
+                              </Button>
+                              <Button variant="outline" size="sm" onClick={() => startDuplicate(type)}>
+                                <Copy className="size-3.5" />
+                                Duplicar
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleDelete(type)}
+                                disabled={deletingKey === type.key}
+                              >
+                                <Trash2 className="size-3.5" />
+                                {deletingKey === type.key ? "Excluindo…" : "Excluir"}
+                              </Button>
+                            </div>
+                          </div>
+                          <CollapsibleAiDescription text={resolveAiDescription(type.aiDescription, type.description)} />
+                          <div>
+                            <p className="text-xs font-medium text-muted-foreground">Texto da mensagem</p>
+                            <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-background p-3 text-sm text-foreground">
+                              {type.messageTemplate}
+                            </pre>
+                          </div>
+                          {type.fields.length > 0 && (
+                            <div>
+                              <p className="text-xs font-medium text-muted-foreground">Campos</p>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {type.fields.map((field) => (
+                                  <span
+                                    key={field.key}
+                                    className="rounded bg-background px-1.5 py-0.5 text-xs text-foreground ring-1 ring-border"
+                                  >
+                                    {field.label || field.key}
+                                    {field.required === false && <span className="text-muted-foreground"> (opcional)</span>}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          <CustomNotificationTestSend
+                            id={"saved-" + type.id}
+                            tenantSlug={tenantSlug}
+                            connectionId={connectionId}
+                            messageTemplate={type.messageTemplate}
+                            fields={type.fields}
+                            greetingStyle={type.greetingStyle}
+                            greetingNameSource={type.greetingNameSource}
+                          />
+                          <CustomNotificationDeveloperInstructions
+                            typeKey={type.key}
+                            typeLabel={type.label}
+                            fields={type.fields}
+                            requiresQr={type.requiresQr}
+                          />
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

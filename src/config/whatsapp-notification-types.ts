@@ -1,5 +1,6 @@
 import type { SegmentoNiche } from "@/generated/prisma/client";
 import { resolveGreetingFirstName, type GreetingNameField } from "@/lib/notifications/greeting-name";
+import { presentDetailValue } from "@/lib/notifications/detail-value";
 
 /**
  * Catalog of WhatsApp notification types the purchase-confirmation API
@@ -304,7 +305,8 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     serviceKey: "purchase_confirmation",
     niches: ["MOBILIDADE_CORRIDAS"],
     buildMessage: ({ whatsappName, recipientName, businessName, details }) => {
-      const opt = (key: string) => details[key]?.trim() ?? "";
+      // "não informado", "N/A", "-" e vazio contam como ausentes (linha some).
+      const opt = (key: string) => presentDetailValue(details[key]);
       const lines = [
         buildGreeting({ style: "HORARIO", nameSource: "CADASTRO", whatsappName, recipientName }),
         "",

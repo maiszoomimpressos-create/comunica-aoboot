@@ -38,6 +38,43 @@ const PREFERRED_CLIENT_NAME_KEYS = [
   "name",
 ] as const;
 
+/** Palavras que o sistema de fora manda no lugar do nome ("Passageiro",
+ * "Cliente"...) — nunca viram saudação; cai no nome do WhatsApp ou em "Olá!". */
+const GENERIC_NAME_TOKENS = new Set([
+  "passageiro",
+  "passageira",
+  "cliente",
+  "clientes",
+  "usuario",
+  "usuaria",
+  "destinatario",
+  "destinataria",
+  "consumidor",
+  "consumidora",
+  "comprador",
+  "compradora",
+  "contato",
+  "pessoa",
+  "nome",
+  "customer",
+  "client",
+  "user",
+  "passenger",
+  "recipient",
+  "desconhecido",
+  "desconhecida",
+  "anonimo",
+  "anonima",
+  "sem",
+  "nao",
+  "informado",
+  "informada",
+  "n/a",
+  "do",
+  "da",
+  "de",
+]);
+
 const BLOCKED_NAME_FIELD = /empresa|motorista|loja|negocio|estabelecimento|business|driver|comercio/;
 
 export interface GreetingNameField {
@@ -113,6 +150,7 @@ export function extractGreetingFirstName(raw: string | null | undefined): string
     if (digits > 0 && digits >= letters) continue;
     const cleaned = stripOuterNonLetters(token);
     if (!cleaned || !hasLetter(cleaned) || looksLikePhoneName(cleaned)) continue;
+    if (GENERIC_NAME_TOKENS.has(foldKey(cleaned))) continue;
     const pretty = titleCaseNameWord(cleaned);
     if (pretty) return pretty;
   }
