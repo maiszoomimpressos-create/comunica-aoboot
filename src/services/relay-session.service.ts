@@ -14,6 +14,7 @@ import {
   closeRelaySession,
 } from "@/repositories/relay-session.repository";
 import { logBotEvent, serializeError } from "@/lib/logging/bot-attendant-logger";
+import { isAutoReplyRateLimited } from "@/services/anti-loop.service";
 
 const CLOSE_COMMAND = "/encerrar";
 
@@ -100,8 +101,9 @@ export async function tryHandleRelayMessage(params: {
   fromPhone: string;
   customerName: string | null;
   text: string | null;
+  chatLid?: string | null;
 }): Promise<boolean> {
-  const { connectionId, fromPhone, text } = params;
+  const { connectionId, fromPhone, text, chatLid } = params;
 
   const customerSession = await findLiveSessionByCustomerPhone(connectionId, fromPhone);
   if (customerSession) {
@@ -116,6 +118,16 @@ export async function tryHandleRelayMessage(params: {
 
     // ACTIVE
     if (!text) {
+      // Aviso automático: passa pelo teto por minuto da proteção anti-loop
+      // (um robô mandando mídia em sequência não pode virar loop aqui).
+      if (await isAutoReplyRateLimited({ connectionId, fromPhone, chatLid })) {
+        await logBotEvent("warn", "relay_text_only_notice_rate_limited", {
+          connectionId,
+          fromPhone,
+          relaySessionId: customerSession.id,
+        });
+        return true;
+      }
       await provider.sendMessage(
         providerConfig,
         fromPhone,

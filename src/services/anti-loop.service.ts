@@ -5,16 +5,21 @@ import { NotFoundError, ValidationError } from "@/lib/server/errors";
 import {
   AUTO_PAUSE_SETOR_DESCRIPTION,
   AUTO_PAUSE_SETOR_NAME,
+  AUTO_REPLY_DAY_WINDOW_MS,
+  AUTO_REPLY_HOUR_WINDOW_MS,
   AUTO_REPLY_WINDOW_MS,
   INBOUND_FLOOD_WINDOW_MS,
   MAX_AUTO_REPLIES_PER_MINUTE,
+  autoReplyPhoneMatches,
   countRecentAutoReplies,
   detectAutomaticSender,
+  evaluateLongWindowCap,
   formatPauseReason,
   maskContactPhone,
   type AutoReplySample,
   type DetectionResult,
   type InboundSample,
+  type LongWindowCounts,
 } from "@/lib/whatsapp/anti-loop";
 
 const RELAY_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -54,22 +59,110 @@ function inboundSamplesForContact(
     const phone = typeof payload.phone === "string" ? payload.phone : "";
     if (phone.replace(/\D/g, "") !== contactDigits) continue;
     const chatName = typeof payload.chatName === "string" && payload.chatName.trim() ? payload.chatName.trim() : null;
-    samples.push({ at: event.receivedAt, text: payloadText(payload), chatName });
+    const messageId = typeof payload.messageId === "string" ? payload.messageId : null;
+    samples.push({ at: event.receivedAt, text: payloadText(payload), chatName, messageId });
   }
   return samples;
 }
 
 function sentSamples(events: { receivedAt: Date; payload: unknown }[]): AutoReplySample[] {
   const samples: AutoReplySample[] = [];
+  const seen = new Set<string>();
   for (const event of events) {
     const payload = isRecord(event.payload) ? event.payload : null;
     if (!payload || payload.type !== "MessageStatusCallback") continue;
     if (payload.status !== "SENT") continue;
     const phone = typeof payload.phone === "string" ? payload.phone : "";
     if (!phone) continue;
+    const id = Array.isArray(payload.ids) && typeof payload.ids[0] === "string" ? payload.ids[0] : null;
+    if (id) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+    }
     samples.push({ at: event.receivedAt, phone });
   }
   return samples;
+}
+
+/**
+ * Contagem em janela de 1h e 24h direto no banco (sem carregar payloads):
+ * mensagens recebidas do contato (messageId distinto) e mensagens enviadas
+ * a ele (status SENT, pelo número ou pelo LID). Usa o índice
+ * (connectionId, receivedAt) do webhook_event.
+ */
+export async function loadLongWindowCounts(
+  connectionId: string,
+  contactPhone: string,
+  chatLid: string | null | undefined,
+  now: Date
+): Promise<LongWindowCounts> {
+  const phoneDigits = contactPhone.replace(/\D/g, "");
+  const lidDigits = (chatLid ?? "").replace(/\D/g, "") || phoneDigits;
+  const since1h = new Date(now.getTime() - AUTO_REPLY_HOUR_WINDOW_MS);
+  const since24h = new Date(now.getTime() - AUTO_REPLY_DAY_WINDOW_MS);
+  const rows = await prisma.$queryRaw<
+    { inbound1h: number; sent1h: number; inbound24h: number; sent24h: number }[]
+  >(Prisma.sql`
+    SELECT
+      COUNT(DISTINCT payload->>'messageId') FILTER (
+        WHERE payload->>'type' = 'ReceivedCallback'
+          AND COALESCE(payload->>'fromMe', 'false') <> 'true'
+          AND regexp_replace(COALESCE(payload->>'phone', ''), '[^0-9]', '', 'g') = ${phoneDigits}
+          AND "receivedAt" >= ${since1h}
+      )::int AS "inbound1h",
+      COUNT(DISTINCT payload->>'messageId') FILTER (
+        WHERE payload->>'type' = 'ReceivedCallback'
+          AND COALESCE(payload->>'fromMe', 'false') <> 'true'
+          AND regexp_replace(COALESCE(payload->>'phone', ''), '[^0-9]', '', 'g') = ${phoneDigits}
+      )::int AS "inbound24h",
+      COUNT(DISTINCT payload->'ids'->>0) FILTER (
+        WHERE payload->>'type' = 'MessageStatusCallback'
+          AND payload->>'status' = 'SENT'
+          AND regexp_replace(COALESCE(payload->>'phone', ''), '[^0-9]', '', 'g') IN (${phoneDigits}, ${lidDigits})
+          AND "receivedAt" >= ${since1h}
+      )::int AS "sent1h",
+      COUNT(DISTINCT payload->'ids'->>0) FILTER (
+        WHERE payload->>'type' = 'MessageStatusCallback'
+          AND payload->>'status' = 'SENT'
+          AND regexp_replace(COALESCE(payload->>'phone', ''), '[^0-9]', '', 'g') IN (${phoneDigits}, ${lidDigits})
+      )::int AS "sent24h"
+    FROM webhook_event
+    WHERE "connectionId" = ${connectionId}
+      AND "receivedAt" >= ${since24h}
+      AND "receivedAt" <= ${now}
+  `);
+  const row = rows[0];
+  return {
+    inbound1h: Number(row?.inbound1h ?? 0),
+    sent1h: Number(row?.sent1h ?? 0),
+    inbound24h: Number(row?.inbound24h ?? 0),
+    sent24h: Number(row?.sent24h ?? 0),
+  };
+}
+
+/**
+ * Checagem leve só do teto por minuto (sem detecção nem pausa), para
+ * respostas automáticas fora do fluxo/IA — ex.: o aviso "só repasso texto"
+ * do repasse humano. Nunca lança; em erro, não bloqueia.
+ */
+export async function isAutoReplyRateLimited(params: {
+  connectionId: string;
+  fromPhone: string;
+  chatLid?: string | null;
+}): Promise<boolean> {
+  try {
+    const now = new Date();
+    const events = await loadRecentWebhookEvents(params.connectionId, new Date(now.getTime() - AUTO_REPLY_WINDOW_MS));
+    const sent = countRecentAutoReplies(sentSamples(events), params.fromPhone, params.chatLid, now, AUTO_REPLY_WINDOW_MS);
+    return sent >= MAX_AUTO_REPLIES_PER_MINUTE;
+  } catch (err) {
+    await logBotEvent("error", "auto_reply_rate_check_failed", {
+      connectionId: params.connectionId,
+      fromPhone: params.fromPhone,
+      error: serializeError(err),
+    });
+    return false;
+  }
 }
 
 export async function findAutoPauseSetor(connectionId: string) {
@@ -246,7 +339,27 @@ export async function interceptAutomaticReply(params: {
       const last = inbound[inbound.length - 1];
       if (!last.chatName) inbound[inbound.length - 1] = { ...last, chatName: customerName };
     }
-    const detection = detectAutomaticSender(inbound, now);
+    const sentToContact = sentSamples(events)
+      .filter((s) => autoReplyPhoneMatches(s.phone, fromPhone, chatLid))
+      .map((s) => s.at);
+    let detection = detectAutomaticSender(inbound, now, { sentAt: sentToContact });
+
+    // Teto de 1h/24h: pega o loop lento que nunca estoura 60s/5min.
+    if (!detection.detected) {
+      try {
+        const counts = await loadLongWindowCounts(connectionId, fromPhone, chatLid, now);
+        const capReason = evaluateLongWindowCap(counts);
+        if (capReason) {
+          detection = { ...detection, detected: true, reasons: [capReason] };
+        }
+      } catch (err) {
+        await logBotEvent("error", "auto_reply_long_window_failed", {
+          connectionId,
+          fromPhone,
+          error: serializeError(err),
+        });
+      }
+    }
 
     if (detection.detected) {
       try {

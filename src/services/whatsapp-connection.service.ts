@@ -565,7 +565,13 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
   // `true` significa "já tratei, não deixa cair no bot". Entra depois do
   // dedup acima (mensagem redelivered não deve ser relayada duas vezes) e
   // antes dos branches texto/áudio normais de baixo.
-  const relayHandled = await tryHandleRelayMessage({ connectionId, fromPhone, customerName, text: bodyText });
+  const relayHandled = await tryHandleRelayMessage({
+    connectionId,
+    fromPhone,
+    customerName,
+    text: bodyText,
+    chatLid,
+  });
   if (relayHandled) return;
 
   // Proteção anti-loop (ver anti-loop.service.ts): se este contato já foi

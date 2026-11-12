@@ -1,6 +1,15 @@
 import {
+  FAST_REPLY_MIN_COUNT,
+  MAX_AUTO_REPLIES_PER_DAY,
+  MAX_AUTO_REPLIES_PER_HOUR,
   autoReplyPhoneMatches,
+  countFastReplies,
   countInWindow,
+  dedupeInboundSamples,
+  evaluateLongWindowCap,
+  isMenuLikeText,
+  largestNearDuplicateGroup,
+  textSimilarity,
   countRecentAutoReplies,
   detectAutomaticSender,
   hasRegularRhythm,
@@ -124,3 +133,96 @@ assert(
 );
 
 console.log("ok: anti-loop checks passed");
+
+// --- Robô x robô (incidente 12/11, "Grupo Rei Jesus") -----------------------
+const reiJesusMenu =
+  "Grupo Rei Jesus agradece seu contato! Para direcionarmos seu atendimento, escolha uma das opções:\n1 - Sou Fornecedor\n2 - Sou Cliente\n3 - Entrevistas\n4 - Administrativo";
+const reiJesusRetry =
+  "Desculpe, não consegui identificar sua solicitação. Para direcionarmos seu atendimento, por favor escolha uma das opções:\n1 - Sou Fornecedor\n2 - Sou Cliente";
+
+assert(isMenuLikeText(reiJesusMenu), "menu numerado é menu de chatbot");
+assert(isMenuLikeText(reiJesusRetry), "frase de URA é menu de chatbot");
+assert(!isMenuLikeText("Oi, cheguei no local, pode descer?"), "frase humana não é menu");
+assert(!isMenuLikeText("Paguei 2 - 3 reais a mais"), "uma linha com número não é menu");
+assert(textSimilarity(reiJesusMenu, reiJesusMenu) === 1, "mesmo texto similaridade 1");
+assert(textSimilarity(reiJesusMenu, "Oi tudo bem, quero saber da corrida de ontem") < 0.3, "textos diferentes");
+
+// Linha do tempo real (segundos antes de "agora" = 2ª mensagem do contato):
+// nossa notificação -34s, contato -19s, nossa resposta -11s, contato 0s.
+const incidentSent = [at(34), at(11)];
+const incidentTwo = samples([
+  { ago: 19, text: reiJesusMenu, chatName: "Juliana Jesus" },
+  { ago: 0, text: reiJesusMenu, chatName: "Juliana Jesus" },
+]);
+const incidentResult = detectAutomaticSender(incidentTwo, now, { sentAt: incidentSent });
+assert(incidentResult.detected, "menu repetido 2x após nossa resposta é detectado já na 2ª mensagem");
+assert(incidentResult.signals.menuLike === true, "sinal menuLike");
+assert(incidentResult.signals.nearDuplicateCount === 2, "2 quase idênticos");
+assert(
+  !detectAutomaticSender(samples([{ ago: 0, text: reiJesusMenu, chatName: "Juliana Jesus" }]), now, {
+    sentAt: [at(15)],
+  }).detected,
+  "um menu sozinho (resposta automática de saudação) não pausa"
+);
+
+// Reentrega do mesmo webhook (mesmo messageId) não conta como repetição.
+const redelivered: InboundSample[] = [
+  { at: at(5), text: reiJesusMenu, chatName: "Empresa", messageId: "ABC" },
+  { at: at(2), text: reiJesusMenu, chatName: "Empresa", messageId: "ABC" },
+];
+assert(dedupeInboundSamples(redelivered).length === 1, "dedupe por messageId");
+assert(!detectAutomaticSender(redelivered, now, { sentAt: [at(10)] }).detected, "reentrega não é robô");
+
+// Pessoa que repete a mesma frase longa 2x (sem cara de menu) não é pausada.
+const humanRepeat = samples([
+  { ago: 40, text: "Moço, o motorista ainda não chegou aqui na portaria do prédio", chatName: "Ana" },
+  { ago: 5, text: "Moço, o motorista ainda não chegou aqui na portaria do prédio", chatName: "Ana" },
+]);
+assert(!detectAutomaticSender(humanRepeat, now, { sentAt: [at(30)] }).detected, "humano repetindo 2x não pausa");
+
+// Texto longo quase idêntico 3x pausa sozinho (sem menu, sem nome de operadora).
+const nearDup3 = samples([
+  { ago: 100, text: "Obrigado pela sua mensagem. Retornaremos o contato em breve, protocolo 1234" },
+  { ago: 60, text: "Obrigado pela sua mensagem. Retornaremos o contato em breve, protocolo 1235" },
+  { ago: 20, text: "Obrigado pela sua mensagem. Retornaremos o contato em breve, protocolo 1236" },
+]);
+assert(largestNearDuplicateGroup(nearDup3) === 3, "3 quase idênticos (muda só o protocolo)");
+assert(detectAutomaticSender(nearDup3, now).detected, "3 quase idênticos longos pausam");
+assert(largestNearDuplicateGroup(samples([{ ago: 9, text: "ok" }, { ago: 5, text: "ok" }, { ago: 1, text: "ok" }])) === 0, "texto curto fica fora");
+
+// Respostas instantâneas (< 3s após nossa mensagem), textos variados.
+const fastInbound = samples([
+  { ago: 98, text: "Recebido" },
+  { ago: 68, text: "Mensagem recebida" },
+  { ago: 38, text: "Aguarde" },
+]);
+const fastSent = [at(100), at(70), at(40)];
+assert(countFastReplies(fastInbound, fastSent) === 3, "3 respostas em 2s");
+const fastResult = detectAutomaticSender(fastInbound, now, { sentAt: fastSent });
+assert(fastResult.detected, "respostas instantâneas repetidas pausam");
+assert(fastResult.signals.fastReplies === FAST_REPLY_MIN_COUNT, "sinal fastReplies");
+const slowHuman = samples([
+  { ago: 90, text: "oi" },
+  { ago: 50, text: "qual o valor?" },
+  { ago: 10, text: "ok obrigado" },
+]);
+assert(countFastReplies(slowHuman, [at(100), at(60), at(20)]) === 0, "humano responde em 10s");
+assert(!detectAutomaticSender(slowHuman, now, { sentAt: [at(100), at(60), at(20)] }).detected, "humano normal não pausa");
+assert(countFastReplies(fastInbound, [at(100)]) === 1, "cada envio nosso conta uma vez só");
+
+// Teto em janela maior (1h / 24h).
+assert(evaluateLongWindowCap({ inbound1h: 10, sent1h: 12, inbound24h: 20, sent24h: 25 }) === null, "abaixo do teto");
+assert(
+  evaluateLongWindowCap({ inbound1h: MAX_AUTO_REPLIES_PER_HOUR, sent1h: 40, inbound24h: 30, sent24h: 40 })?.includes("1h"),
+  "30 respostas em 1h pausa"
+);
+assert(
+  evaluateLongWindowCap({ inbound1h: 5, sent1h: 5, inbound24h: MAX_AUTO_REPLIES_PER_DAY, sent24h: 70 })?.includes("24h"),
+  "60 respostas em 24h pausa"
+);
+assert(
+  evaluateLongWindowCap({ inbound1h: 2, sent1h: 50, inbound24h: 2, sent24h: 80 }) === null,
+  "muitas notificações sem resposta do contato não contam como loop"
+);
+
+console.log("ok: robô x robô checks passed");
