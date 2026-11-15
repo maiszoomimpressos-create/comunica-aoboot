@@ -49,9 +49,25 @@ export const FREQUENCY_MODE_LABELS: Record<AdvertisementFrequencyMode, string> =
   EVERY_N_SENDS: "Uma a cada N envios",
 };
 export const MAX_FREQUENCY_VALUE = 20;
-export const MAX_AD_TEXT_LENGTH = MAX_IMAGE_CAPTION_LENGTH;
-/** Espera depois do recibo antes de mandar a publicidade. */
-export const ADVERTISEMENT_DELAY_MS = 8_000;
+/** Título fixo no começo de toda publicidade (separa do recibo no WhatsApp). */
+export const ADVERTISEMENT_TITLE = "📣 *Oferta*";
+/** Cabe na legenda da imagem junto com o título (um balão só). */
+export const MAX_AD_TEXT_LENGTH = MAX_IMAGE_CAPTION_LENGTH - ADVERTISEMENT_TITLE.length - 2;
+/** Espera depois que o recibo chega no aparelho (status RECEIVED). */
+export const ADVERTISEMENT_DELAY_MS = 30_000;
+/** Sem RECEIVED do recibo nesse prazo, a publicidade não sai (expira). */
+export const ADVERTISEMENT_RECEIPT_TIMEOUT_MS = 30 * 60_000;
+/** SENDING parado por mais que isso = envio interrompido (não reenvia). */
+export const ADVERTISEMENT_SENDING_STUCK_MS = 15 * 60_000;
+/** Status da Z-API que confirmam que o recibo chegou no aparelho. */
+export const RECEIPT_DELIVERED_STATUSES = ["RECEIVED", "READ", "PLAYED"] as const;
+
+/** Põe o título "📣 Oferta" no começo (sem duplicar se já estiver lá). */
+export function withAdvertisementTitle(text: string): string {
+  const body = text.trim();
+  if (body.startsWith(ADVERTISEMENT_TITLE)) return body;
+  return body ? `${ADVERTISEMENT_TITLE}\n\n${body}` : ADVERTISEMENT_TITLE;
+}
 
 export function normalizeFrequencyMode(value: string): AdvertisementFrequencyMode {
   return value === "EVERY_N_SENDS" ? "EVERY_N_SENDS" : "PER_DAY";
@@ -122,7 +138,7 @@ export function selectAdvertisement(
  */
 export const ADVERTISEMENT_BUTTONS_ENABLED = false;
 
-/** Banner em cima e texto embaixo — chega num balão só (imagem com legenda). */
+/** Banner em cima e "📣 Oferta" + texto embaixo — um balão só (imagem com legenda). */
 export function planAdvertisementMessage(
   ad: Pick<AdvertisementRuleInput, "imageUrl" | "messageText" | "buttonLabel" | "buttonUrl">
 ): MessageDeliveryPlan {
@@ -133,8 +149,9 @@ export function planAdvertisementMessage(
   if (hasButton && !ADVERTISEMENT_BUTTONS_ENABLED && !text.includes(ad.buttonUrl!)) {
     text = `${text.trim()}\n\n👉 ${ad.buttonLabel!.trim()}: ${ad.buttonUrl}`.trim();
   }
+  text = withAdvertisementTitle(text);
   if (ad.imageUrl && isHttpUrl(ad.imageUrl)) blocks.push({ id: "banner", type: "imagem", image: ad.imageUrl });
-  if (text.trim()) blocks.push({ id: "texto", type: "texto", text });
+  blocks.push({ id: "texto", type: "texto", text });
   if (hasButton && ADVERTISEMENT_BUTTONS_ENABLED) {
     blocks.push({ id: "botao", type: "botoes", buttons: [{ id: "1", label: ad.buttonLabel!.trim(), url: ad.buttonUrl! }] });
   }

@@ -22,7 +22,11 @@ import {
 import { renderCustomMessageTemplate } from "@/services/custom-notification-type.service";
 import { resolveLinkButtons } from "@/lib/notifications/custom-link-buttons";
 import { sendTextWithLinkButtons } from "@/lib/whatsapp/send-with-link-buttons";
-import { scheduleAdvertisementAfterNotification } from "@/services/advertisement-schedule.service";
+import {
+  onWebhookForAdvertisements,
+  scheduleAdvertisementAfterNotification,
+} from "@/services/advertisement-schedule.service";
+import { extractMessageId } from "@/lib/whatsapp/send-message-plan";
 import type {
   QrCodeResult,
   SendMessageResult,
@@ -654,6 +658,9 @@ export async function recordWebhookEvent(connectionId: string, payload: unknown)
   await applyConnectionStatusFromWebhook(connectionId, payload).catch((err) => {
     void logBotEvent("error", "apply_connection_status_failed", { connectionId, error: serializeError(err) });
   });
+  // Publicidades: o RECEIVED de um recibo libera a publicidade da fila
+  // (30 s depois, em after()). Outros eventos: não faz nada. Nunca lança.
+  onWebhookForAdvertisements(connectionId, payload);
   after(() =>
     maybeHandleInboundBotMessage(connectionId, payload).catch((err) => {
       void logBotEvent("error", "bot_pipeline_uncaught", { connectionId, error: serializeError(err) });
@@ -819,9 +826,10 @@ export async function sendPurchaseConfirmation(
     result,
   });
 
-  // Publicidades: depois de um envio com sucesso, agenda (after(), alguns
-  // segundos depois) no máximo UMA publicidade ativa ligada a esta função.
-  // Nunca lança e nunca atrasa esta resposta (ver advertisement-dispatch.service.ts).
+  // Publicidades: depois de um envio com sucesso, põe na fila (after()) no
+  // máximo UMA publicidade ativa ligada a esta função. Ela só sai quando o
+  // recibo chegar no aparelho (RECEIVED) + 30 s; sem RECEIVED em 30 min,
+  // expira. Nunca lança e nunca atrasa esta resposta.
   if (result.ok) {
     scheduleAdvertisementAfterNotification({
       connectionId: connection.id,
@@ -829,6 +837,7 @@ export async function sendPurchaseConfirmation(
       providerKey: connection.provider.key,
       to: input.to,
       notificationType: resolvedKey,
+      receiptMessageId: extractMessageId(result.raw),
     });
   }
 

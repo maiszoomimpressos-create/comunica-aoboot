@@ -59,8 +59,10 @@ export async function countDeliveriesByAdvertisement(tenantId: string, since?: D
   const out = new Map<string, { sent: number; failed: number }>();
   for (const row of rows) {
     const entry = out.get(row.advertisementId) ?? { sent: 0, failed: 0 };
+    // PENDING/SENDING (aguardando o recibo chegar), EXPIRED e SKIPPED não
+    // contam como enviadas nem como falha.
     if (row.status === "SENT") entry.sent += row._count._all;
-    else entry.failed += row._count._all;
+    else if (row.status === "FAILED") entry.failed += row._count._all;
     out.set(row.advertisementId, entry);
   }
   return out;
@@ -74,19 +76,35 @@ export function listTriggeredAdvertisements(connectionId: string, notificationTy
   });
 }
 
+/** Enviadas + na fila (PENDING/SENDING): a fila também conta no limite,
+ * para dois recibos seguidos não gerarem duas publicidades. */
+const COUNTED_STATUSES = ["SENT", "PENDING", "SENDING"];
+
 export async function loadRecipientAdDeliveries(connectionId: string, contactKey: string, since: Date) {
   const [last, last24hCount] = await Promise.all([
     prisma.advertisementDelivery.findFirst({
-      where: { connectionId, contactKey, status: "SENT" },
+      where: { connectionId, contactKey, status: { in: COUNTED_STATUSES } },
       orderBy: { createdAt: "desc" },
       select: { createdAt: true },
     }),
     prisma.advertisementDelivery.count({
-      where: { connectionId, contactKey, status: "SENT", createdAt: { gte: since } },
+      where: { connectionId, contactKey, status: { in: COUNTED_STATUSES }, createdAt: { gte: since } },
     }),
   ]);
   return { lastSentAt: last?.createdAt ?? null, last24hCount };
 }
+
+/**
+ * Ciclo de uma linha de advertisement_delivery (sem coluna nova):
+ * - PENDING: recibo enviado, esperando o status RECEIVED. `messageIds` guarda
+ *   o id do RECIBO e `recipientPhone` o destino;
+ * - SENDING: reservada por quem vai enviar (garante uma só por recibo);
+ * - SENT / FAILED: `messageIds` passa a ser o(s) id(s) da PUBLICIDADE;
+ * - EXPIRED: o recibo não confirmou entrega em 30 min — não envia;
+ * - SKIPPED: na hora de enviar, a publicidade foi pausada/encerrada ou o
+ *   contato pausou/bloqueou.
+ */
+export type AdvertisementDeliveryStatus = "PENDING" | "SENDING" | "SENT" | "FAILED" | "EXPIRED" | "SKIPPED";
 
 export interface AdvertisementDeliveryInput {
   advertisementId: string;
@@ -94,14 +112,133 @@ export interface AdvertisementDeliveryInput {
   contactKey: string;
   recipientPhone: string | null;
   notificationType: string;
-  status: "SENT" | "FAILED";
+  status: AdvertisementDeliveryStatus;
   messageIds: string[];
   error: string | null;
   deleteAt: Date | null;
 }
 
 export function createAdvertisementDelivery(data: AdvertisementDeliveryInput) {
-  return prisma.advertisementDelivery.create({ data });
+  return prisma.advertisementDelivery.create({ data, select: { id: true } });
+}
+
+export interface PendingAdvertisementDelivery {
+  id: string;
+  advertisementId: string;
+  connectionId: string;
+  contactKey: string;
+  recipientPhone: string | null;
+  notificationType: string;
+  status: string;
+  messageIds: string[];
+  createdAt: Date;
+}
+
+const PENDING_SELECT = {
+  id: true,
+  advertisementId: true,
+  connectionId: true,
+  contactKey: true,
+  recipientPhone: true,
+  notificationType: true,
+  status: true,
+  messageIds: true,
+  createdAt: true,
+} as const;
+
+export function getAdvertisementDelivery(id: string): Promise<PendingAdvertisementDelivery | null> {
+  return prisma.advertisementDelivery.findUnique({ where: { id }, select: PENDING_SELECT });
+}
+
+/** Já existe publicidade para este recibo? (uma só por recibo) */
+export async function hasDeliveryForReceipt(connectionId: string, receiptMessageId: string, since: Date) {
+  const row = await prisma.advertisementDelivery.findFirst({
+    where: { connectionId, messageIds: { has: receiptMessageId }, createdAt: { gte: since } },
+    select: { id: true },
+  });
+  return !!row;
+}
+
+export function findPendingDeliveriesByReceiptIds(connectionId: string, receiptMessageIds: string[]) {
+  return prisma.advertisementDelivery.findMany({
+    where: { connectionId, status: "PENDING", messageIds: { hasSome: receiptMessageIds } },
+    select: PENDING_SELECT,
+    take: 10,
+  });
+}
+
+export function listPendingAdvertisementDeliveries(limit: number) {
+  return prisma.advertisementDelivery.findMany({
+    where: { status: "PENDING" },
+    orderBy: { createdAt: "asc" },
+    select: PENDING_SELECT,
+    take: limit,
+  });
+}
+
+/** Reserva para envio: só um (after() do webhook ou cron) ganha. */
+export async function claimAdvertisementDelivery(id: string): Promise<boolean> {
+  const res = await prisma.advertisementDelivery.updateMany({
+    where: { id, status: "PENDING" },
+    data: { status: "SENDING" },
+  });
+  return res.count === 1;
+}
+
+export async function expireAdvertisementDelivery(id: string, error: string): Promise<boolean> {
+  const res = await prisma.advertisementDelivery.updateMany({
+    where: { id, status: "PENDING" },
+    data: { status: "EXPIRED", error: error.slice(0, 500), recipientPhone: null },
+  });
+  return res.count === 1;
+}
+
+export function finishAdvertisementDelivery(
+  id: string,
+  data: { status: "SENT" | "FAILED" | "SKIPPED"; messageIds: string[]; recipientPhone: string | null; error: string | null; deleteAt: Date | null }
+) {
+  return prisma.advertisementDelivery.updateMany({
+    where: { id, status: "SENDING" },
+    data: { ...data, error: data.error?.slice(0, 500) ?? null },
+  });
+}
+
+/** SENDING parado (função caiu no meio): vira FAILED, sem reenviar. */
+export function failStuckAdvertisementDeliveries(before: Date) {
+  return prisma.advertisementDelivery.updateMany({
+    where: { status: "SENDING", createdAt: { lt: before } },
+    data: { status: "FAILED", error: "Envio interrompido; não foi reenviado.", recipientPhone: null },
+  });
+}
+
+export function getAdvertisementById(id: string) {
+  return prisma.advertisement.findUnique({ where: { id } });
+}
+
+/**
+ * Quando o recibo chegou no aparelho: primeiro status RECEIVED/READ/PLAYED
+ * desse messageId gravado em webhook_event (o webhook grava tudo).
+ */
+export async function findReceiptDeliveredAt(
+  connectionId: string,
+  receiptMessageId: string,
+  since: Date,
+  statuses: readonly string[]
+): Promise<Date | null> {
+  const row = await prisma.webhookEvent.findFirst({
+    where: {
+      connectionId,
+      receivedAt: { gte: since },
+      AND: [
+        { payload: { path: ["type"], equals: "MessageStatusCallback" } },
+        { payload: { path: ["ids"], array_contains: [receiptMessageId] } },
+        { OR: statuses.map((s) => ({ payload: { path: ["status"], equals: s } })) },
+      ],
+    },
+    orderBy: { receivedAt: "asc" },
+    select: { receivedAt: true },
+  });
+  return row?.receivedAt ?? null;
 }
 
 export function markAdvertisementSent(id: string, at: Date) {

@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { dispatchDueCampaigns } from "@/services/campaign-dispatcher.service";
-import { deleteExpiredAdvertisementMessages } from "@/services/advertisement-dispatch.service";
+import {
+  deleteExpiredAdvertisementMessages,
+  processPendingAdvertisements,
+} from "@/services/advertisement-dispatch.service";
 
 /**
  * Ticked by an external pinger (e.g. cron-job.org) roughly once a minute —
@@ -34,7 +37,13 @@ export async function POST(request: NextRequest) {
     console.error("[cron/campaign-dispatcher] advertisement cleanup failed", err);
     return null;
   });
-  return NextResponse.json({ ok: true, ...summary, advertisementCleanup });
+  // Publicidades na fila: envia as que o recibo já chegou (RECEIVED + 30 s)
+  // e expira as sem entrega em 30 min. Garantia do after() do webhook.
+  const advertisementQueue = await processPendingAdvertisements().catch((err) => {
+    console.error("[cron/campaign-dispatcher] advertisement queue failed", err);
+    return null;
+  });
+  return NextResponse.json({ ok: true, ...summary, advertisementCleanup, advertisementQueue });
 }
 
 // Most external cron/pinger services default to GET — accept it too so

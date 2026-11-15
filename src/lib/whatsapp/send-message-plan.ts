@@ -16,7 +16,8 @@ export interface SendMessagePlanResult extends SendMessageResult {
   sentCount: number;
 }
 
-function extractMessageId(raw: unknown): string | null {
+/** messageId da resposta da Z-API (send-text/send-image/...), ou null. */
+export function extractMessageId(raw: unknown): string | null {
   if (!raw || typeof raw !== "object") return null;
   const row = raw as Record<string, unknown>;
   const id = row.messageId ?? row.id ?? row.zaapId;

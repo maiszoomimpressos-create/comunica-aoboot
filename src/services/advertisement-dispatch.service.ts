@@ -9,19 +9,34 @@ import { contactTargetKey, NOTIFICATION_SENT_ACTION } from "@/services/ack-silen
 import { findLiveAutoPauseSession } from "@/services/anti-loop.service";
 import { getConnectionCredentialsById } from "@/repositories/channel-connection.repository";
 import {
+  claimAdvertisementDelivery,
   createAdvertisementDelivery,
+  expireAdvertisementDelivery,
+  failStuckAdvertisementDeliveries,
+  findPendingDeliveriesByReceiptIds,
+  findReceiptDeliveredAt,
+  finishAdvertisementDelivery,
+  getAdvertisementById,
+  getAdvertisementDelivery,
+  hasDeliveryForReceipt,
   listDueAdvertisementDeletions,
+  listPendingAdvertisementDeliveries,
   listTriggeredAdvertisements,
   loadRecipientAdDeliveries,
   markAdvertisementDeliveryDeleted,
   markAdvertisementDeliveryDeleteFailed,
   markAdvertisementSent,
   type AdvertisementDeliveryInput,
+  type PendingAdvertisementDelivery,
 } from "@/repositories/advertisement.repository";
 import {
   ADVERTISEMENT_DELAY_MS,
+  ADVERTISEMENT_RECEIPT_TIMEOUT_MS,
+  ADVERTISEMENT_SENDING_STUCK_MS,
+  RECEIPT_DELIVERED_STATUSES,
   WHATSAPP_DELETE_WINDOW_HOURS,
   computeDeleteAt,
+  isAdvertisementLive,
   isMissingTableError,
   planAdvertisementMessage,
   selectAdvertisement,
@@ -36,34 +51,59 @@ export interface AdvertisementTrigger {
   providerKey: string;
   to: string;
   notificationType: string;
+  /** messageId do recibo na Z-API — a publicidade espera o RECEIVED dele. */
+  receiptMessageId: string | null;
 }
 
+export type AdvertisementSkipReason =
+  | "tabela_ausente"
+  | "nenhuma_ativa"
+  | "limite_frequencia"
+  | "contato_pausado"
+  | "contato_bloqueado"
+  | "telefone_invalido"
+  | "conexao_indisponivel"
+  | "sem_id_do_recibo"
+  | "ja_na_fila";
+
+/** Resultado de enfileirar (no envio do recibo). */
+export type AdvertisementEnqueueOutcome =
+  | { status: "queued"; advertisementId: string; deliveryId: string }
+  | { status: "skipped"; reason: AdvertisementSkipReason }
+  | { status: "error"; error: string };
+
+/** Resultado de tentar enviar uma publicidade da fila. */
 export type AdvertisementDispatchOutcome =
   | { status: "sent"; advertisementId: string; messageIds: string[] }
   | { status: "failed"; advertisementId: string; error: string }
-  | {
-      status: "skipped";
-      reason:
-        | "tabela_ausente"
-        | "nenhuma_ativa"
-        | "limite_frequencia"
-        | "contato_pausado"
-        | "contato_bloqueado"
-        | "telefone_invalido"
-        | "conexao_indisponivel";
-    }
+  | { status: "waiting"; reason: "recibo_nao_entregue" | "aguardando_intervalo"; readyAt?: Date }
+  | { status: "expired" }
+  | { status: "skipped"; reason: AdvertisementSkipReason | "ja_processada" | "publicidade_inativa" }
   | { status: "error"; error: string };
 
 /** Dependências trocáveis nos testes (scripts/check-advertisements.ts). */
 export interface AdvertisementDispatchDeps {
   now: () => Date;
+  sleep: (ms: number) => Promise<void>;
   loadCandidates: (connectionId: string, notificationType: string) => Promise<AdvertisementRuleInput[]>;
+  loadAdvertisement: (id: string) => Promise<AdvertisementRuleInput | null>;
   isContactPaused: (connectionId: string, phones: string[]) => Promise<boolean>;
   isContactOptedOut: (connectionId: string, phones: string[]) => Promise<boolean>;
   loadHistory: (trigger: AdvertisementTrigger, contactKey: string, now: Date) => Promise<RecipientAdHistory>;
   getSender: (connectionId: string, providerKey: string) => Promise<{ provider: WhatsappProvider; config: WhatsappConnectionConfig } | null>;
-  recordDelivery: (data: AdvertisementDeliveryInput) => Promise<unknown>;
+  hasDeliveryForReceipt: (connectionId: string, receiptMessageId: string, since: Date) => Promise<boolean>;
+  createPending: (data: AdvertisementDeliveryInput) => Promise<{ id: string }>;
+  getDelivery: (id: string) => Promise<PendingAdvertisementDelivery | null>;
+  findReceiptDeliveredAt: (connectionId: string, receiptMessageId: string, since: Date) => Promise<Date | null>;
+  claim: (id: string) => Promise<boolean>;
+  expire: (id: string, error: string) => Promise<boolean>;
+  finish: (
+    id: string,
+    data: { status: "SENT" | "FAILED" | "SKIPPED"; messageIds: string[]; recipientPhone: string | null; error: string | null; deleteAt: Date | null }
+  ) => Promise<unknown>;
   markSent: (id: string, at: Date) => Promise<unknown>;
+  listPending: (limit: number) => Promise<{ id: string }[]>;
+  failStuck: (createdBefore: Date) => Promise<unknown>;
 }
 
 /** Formatos possíveis do mesmo celular (com e sem o 9º dígito). */
@@ -79,9 +119,15 @@ export function phoneVariants(phone: string): string[] {
 
 const DAY_MS = 24 * 3_600_000;
 
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
 export const defaultAdvertisementDispatchDeps: AdvertisementDispatchDeps = {
   now: () => new Date(),
+  sleep,
   loadCandidates: (connectionId, notificationType) => listTriggeredAdvertisements(connectionId, notificationType),
+  loadAdvertisement: (id) => getAdvertisementById(id),
   async isContactPaused(connectionId, phones) {
     for (const phone of phones) {
       if (await findLiveAutoPauseSession(connectionId, phone)) return true;
@@ -124,19 +170,28 @@ export const defaultAdvertisementDispatchDeps: AdvertisementDispatchDeps = {
       },
     };
   },
-  recordDelivery: createAdvertisementDelivery,
+  hasDeliveryForReceipt,
+  createPending: createAdvertisementDelivery,
+  getDelivery: getAdvertisementDelivery,
+  findReceiptDeliveredAt: (connectionId, receiptMessageId, since) =>
+    findReceiptDeliveredAt(connectionId, receiptMessageId, since, RECEIPT_DELIVERED_STATUSES),
+  claim: claimAdvertisementDelivery,
+  expire: expireAdvertisementDelivery,
+  finish: finishAdvertisementDelivery,
   markSent: markAdvertisementSent,
+  listPending: listPendingAdvertisementDeliveries,
+  failStuck: failStuckAdvertisementDeliveries,
 };
 
 /**
- * Depois de um envio de função COM SUCESSO: escolhe e envia no máximo UMA
- * publicidade para aquele destinatário. Nunca lança — todo erro vira um
- * resultado e um log; o recibo já foi entregue antes disto rodar.
+ * Passo 1 — logo depois de um recibo enviado COM SUCESSO: escolhe no máximo
+ * UMA publicidade e deixa na fila (PENDING) esperando o recibo chegar no
+ * aparelho. Não envia nada aqui. Nunca lança.
  */
-export async function dispatchAdvertisementAfterNotification(
+export async function enqueueAdvertisementAfterNotification(
   trigger: AdvertisementTrigger,
   deps: AdvertisementDispatchDeps = defaultAdvertisementDispatchDeps
-): Promise<AdvertisementDispatchOutcome> {
+): Promise<AdvertisementEnqueueOutcome> {
   try {
     const now = deps.now();
     let candidates: AdvertisementRuleInput[];
@@ -147,6 +202,7 @@ export async function dispatchAdvertisementAfterNotification(
       throw err;
     }
     if (candidates.length === 0) return { status: "skipped", reason: "nenhuma_ativa" };
+    if (!trigger.receiptMessageId) return { status: "skipped", reason: "sem_id_do_recibo" };
 
     const contactKey = contactTargetKey(trigger.connectionId, trigger.to);
     if (!contactKey) return { status: "skipped", reason: "telefone_invalido" };
@@ -158,35 +214,25 @@ export async function dispatchAdvertisementAfterNotification(
     const history = await deps.loadHistory(trigger, contactKey, now);
     const selection = selectAdvertisement(candidates, { notificationType: trigger.notificationType, now, history });
     if (!selection.ad) return { status: "skipped", reason: selection.reason };
-    const ad = selection.ad;
 
-    const sender = await deps.getSender(trigger.connectionId, trigger.providerKey);
-    if (!sender) return { status: "skipped", reason: "conexao_indisponivel" };
-
-    const plan = planAdvertisementMessage(ad);
-    const result = await sendMessagePlan(sender.provider, sender.config, trigger.to, plan.deliveries, 0);
-    const sentAt = deps.now();
-    const fullySent = result.ok && result.sentCount === plan.deliveries.length;
-    const messageIds = messageIdsFromPlanResult(result);
-    const deleteAt = result.sentCount > 0 ? computeDeleteAt(sentAt, ad.deleteAfterHours) : null;
-
-    await deps.recordDelivery({
-      advertisementId: ad.id,
+    const since = new Date(now.getTime() - DAY_MS);
+    if (await deps.hasDeliveryForReceipt(trigger.connectionId, trigger.receiptMessageId, since)) {
+      return { status: "skipped", reason: "ja_na_fila" };
+    }
+    const row = await deps.createPending({
+      advertisementId: selection.ad.id,
       connectionId: trigger.connectionId,
       contactKey,
-      recipientPhone: deleteAt && messageIds.length > 0 ? trigger.to : null,
+      recipientPhone: trigger.to,
       notificationType: trigger.notificationType,
-      status: result.sentCount > 0 ? "SENT" : "FAILED",
-      messageIds,
-      error: fullySent ? null : result.message.slice(0, 500),
-      deleteAt: messageIds.length > 0 ? deleteAt : null,
+      status: "PENDING",
+      messageIds: [trigger.receiptMessageId],
+      error: null,
+      deleteAt: null,
     });
-    if (result.sentCount > 0) await deps.markSent(ad.id, sentAt);
-
-    if (result.sentCount === 0) return { status: "failed", advertisementId: ad.id, error: result.message };
-    return { status: "sent", advertisementId: ad.id, messageIds };
+    return { status: "queued", advertisementId: selection.ad.id, deliveryId: row.id };
   } catch (err) {
-    await logBotEvent("error", "advertisement.dispatch_failed", {
+    await logBotEvent("error", "advertisement.enqueue_failed", {
       connectionId: trigger.connectionId,
       notificationType: trigger.notificationType,
       error: serializeError(err),
@@ -195,36 +241,126 @@ export async function dispatchAdvertisementAfterNotification(
   }
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Passo 2 — envia a publicidade de uma linha PENDING quando o recibo já
+ * chegou no aparelho (RECEIVED) há pelo menos 30 s. Chamado pelo after()
+ * do webhook de status (com `wait`: dorme o que faltar) e pelo cron de ~1
+ * min (sem esperar). Sem RECEIVED em 30 min: expira e não envia. Só quem
+ * reservar a linha (PENDING→SENDING) envia — uma só por recibo. Nunca lança.
+ */
+export async function processPendingAdvertisement(
+  deliveryId: string,
+  options: { wait?: boolean } = {},
+  deps: AdvertisementDispatchDeps = defaultAdvertisementDispatchDeps
+): Promise<AdvertisementDispatchOutcome> {
+  try {
+    const row = await deps.getDelivery(deliveryId);
+    if (!row || row.status !== "PENDING") return { status: "skipped", reason: "ja_processada" };
+    const receiptMessageId = row.messageIds[0];
+    const now = deps.now();
+    const found = receiptMessageId
+      ? await deps.findReceiptDeliveredAt(row.connectionId, receiptMessageId, new Date(row.createdAt.getTime() - 60_000))
+      : null;
+    // RECEIVED que chegou depois do prazo não vale (expira do mesmo jeito).
+    const deliveredAt =
+      found && found.getTime() - row.createdAt.getTime() <= ADVERTISEMENT_RECEIPT_TIMEOUT_MS ? found : null;
+
+    if (!deliveredAt) {
+      if (now.getTime() - row.createdAt.getTime() >= ADVERTISEMENT_RECEIPT_TIMEOUT_MS) {
+        await deps.expire(row.id, "O recibo não confirmou entrega (RECEIVED) em 30 minutos; publicidade não enviada.");
+        return { status: "expired" };
+      }
+      return { status: "waiting", reason: "recibo_nao_entregue" };
+    }
+
+    const readyAt = new Date(deliveredAt.getTime() + ADVERTISEMENT_DELAY_MS);
+    const remaining = readyAt.getTime() - now.getTime();
+    if (remaining > 0) {
+      if (!options.wait) return { status: "waiting", reason: "aguardando_intervalo", readyAt };
+      await deps.sleep(remaining);
+    }
+
+    if (!(await deps.claim(row.id))) return { status: "skipped", reason: "ja_processada" };
+
+    const sendAt = deps.now();
+    const ad = await deps.loadAdvertisement(row.advertisementId);
+    if (!ad || !isAdvertisementLive(ad, sendAt)) {
+      await deps.finish(row.id, { status: "SKIPPED", messageIds: [], recipientPhone: null, error: "Publicidade pausada ou encerrada antes do envio.", deleteAt: null });
+      return { status: "skipped", reason: "publicidade_inativa" };
+    }
+    const to = row.recipientPhone ?? "";
+    const phones = phoneVariants(to);
+    if (await deps.isContactPaused(row.connectionId, phones)) {
+      await deps.finish(row.id, { status: "SKIPPED", messageIds: [], recipientPhone: null, error: "Contato pausado pelo anti-loop.", deleteAt: null });
+      return { status: "skipped", reason: "contato_pausado" };
+    }
+    if (await deps.isContactOptedOut(row.connectionId, phones)) {
+      await deps.finish(row.id, { status: "SKIPPED", messageIds: [], recipientPhone: null, error: "Contato bloqueou as mensagens.", deleteAt: null });
+      return { status: "skipped", reason: "contato_bloqueado" };
+    }
+
+    const sender = await deps.getSender(row.connectionId, "z-api");
+    if (!sender) {
+      await deps.finish(row.id, { status: "FAILED", messageIds: [], recipientPhone: null, error: "Conexão indisponível.", deleteAt: null });
+      return { status: "failed", advertisementId: ad.id, error: "Conexão indisponível." };
+    }
+
+    const plan = planAdvertisementMessage(ad);
+    const result = await sendMessagePlan(sender.provider, sender.config, to, plan.deliveries, 0);
+    const sentAt = deps.now();
+    const fullySent = result.ok && result.sentCount === plan.deliveries.length;
+    const messageIds = messageIdsFromPlanResult(result);
+    const deleteAt = result.sentCount > 0 && messageIds.length > 0 ? computeDeleteAt(sentAt, ad.deleteAfterHours) : null;
+
+    await deps.finish(row.id, {
+      status: result.sentCount > 0 ? "SENT" : "FAILED",
+      messageIds,
+      recipientPhone: deleteAt ? to : null,
+      error: fullySent ? null : result.message,
+      deleteAt,
+    });
+    if (result.sentCount > 0) await deps.markSent(ad.id, sentAt);
+
+    if (result.sentCount === 0) return { status: "failed", advertisementId: ad.id, error: result.message };
+    return { status: "sent", advertisementId: ad.id, messageIds };
+  } catch (err) {
+    await logBotEvent("error", "advertisement.dispatch_failed", { deliveryId, error: serializeError(err) }).catch(() => undefined);
+    return { status: "error", error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function logOutcome(step: string, data: Record<string, unknown> & { status: string }) {
+  const level = data.status === "error" || data.status === "failed" ? "warn" : "info";
+  await logBotEvent(level, step, data).catch(() => undefined);
 }
 
 /**
- * Agenda o disparo para depois da resposta da API e espera alguns segundos
- * para a publicidade chegar depois do recibo. Nunca lança e nunca segura a
- * resposta. `schedule` é o after() do Next (ver advertisement-schedule.ts);
- * fica injetável para os testes rodarem fora do Next.
+ * No envio do recibo: põe a publicidade na fila em segundo plano (after()).
+ * Nunca lança e nunca segura a resposta. `schedule` é o after() do Next
+ * (ver advertisement-schedule.service.ts), injetável nos testes.
  */
 export function scheduleAdvertisementTask(
   trigger: AdvertisementTrigger,
   schedule: (task: () => Promise<void>) => void,
-  options: { delayMs?: number; deps?: AdvertisementDispatchDeps } = {}
+  options: { deps?: AdvertisementDispatchDeps } = {}
 ): void {
-  const delayMs = options.delayMs ?? ADVERTISEMENT_DELAY_MS;
   try {
     schedule(async () => {
       try {
-        await sleep(delayMs);
-        const outcome = await dispatchAdvertisementAfterNotification(trigger, options.deps);
-        if (outcome.status !== "skipped" || outcome.reason !== "nenhuma_ativa") {
-          await logBotEvent(outcome.status === "sent" || outcome.status === "skipped" ? "info" : "warn", "advertisement.dispatch", {
-            connectionId: trigger.connectionId,
-            notificationType: trigger.notificationType,
-            ...outcome,
-          });
+        const outcome = await enqueueAdvertisementAfterNotification(trigger, options.deps);
+        if (outcome.status === "skipped" && outcome.reason === "nenhuma_ativa") return;
+        await logOutcome("advertisement.enqueue", {
+          connectionId: trigger.connectionId,
+          notificationType: trigger.notificationType,
+          ...outcome,
+        });
+        // O RECEIVED pode ter chegado antes da fila existir: confere uma vez.
+        if (outcome.status === "queued") {
+          const sent = await processPendingAdvertisement(outcome.deliveryId, { wait: true }, options.deps);
+          if (sent.status !== "waiting") await logOutcome("advertisement.dispatch", { deliveryId: outcome.deliveryId, ...sent });
         }
       } catch {
-        // dispatch já não lança; isto é só defesa extra.
+        // as funções acima já não lançam; isto é só defesa extra.
       }
     });
   } catch (err) {
@@ -233,6 +369,81 @@ export function scheduleAdvertisementTask(
       error: serializeError(err),
     }).catch(() => undefined);
   }
+}
+
+/** Ids e status de um MessageStatusCallback da Z-API (ou null). */
+export function parseReceiptStatusWebhook(payload: unknown): { ids: string[]; status: string } | null {
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as Record<string, unknown>;
+  if (p.type !== "MessageStatusCallback" || typeof p.status !== "string") return null;
+  if (!(RECEIPT_DELIVERED_STATUSES as readonly string[]).includes(p.status)) return null;
+  const ids = Array.isArray(p.ids) ? p.ids.filter((id): id is string => typeof id === "string" && !!id) : [];
+  return ids.length > 0 ? { ids, status: p.status } : null;
+}
+
+/**
+ * Webhook de status: se é o RECEIVED de um recibo com publicidade na fila,
+ * espera os 30 s em segundo plano e envia. Nunca lança.
+ */
+export function handleAdvertisementReceiptStatus(
+  connectionId: string,
+  payload: unknown,
+  schedule: (task: () => Promise<void>) => void,
+  deps: AdvertisementDispatchDeps = defaultAdvertisementDispatchDeps,
+  findPending: (connectionId: string, ids: string[]) => Promise<{ id: string }[]> = findPendingDeliveriesByReceiptIds
+): void {
+  const parsed = parseReceiptStatusWebhook(payload);
+  if (!parsed) return;
+  try {
+    schedule(async () => {
+      try {
+        const rows = await findPending(connectionId, parsed.ids);
+        for (const row of rows) {
+          const outcome = await processPendingAdvertisement(row.id, { wait: true }, deps);
+          if (outcome.status !== "waiting") await logOutcome("advertisement.dispatch", { deliveryId: row.id, ...outcome });
+        }
+      } catch (err) {
+        if (!isMissingTableError(err)) {
+          await logBotEvent("error", "advertisement.receipt_status_failed", { connectionId, error: serializeError(err) }).catch(() => undefined);
+        }
+      }
+    });
+  } catch {
+    // after() indisponível: o cron de ~1 min cuida.
+  }
+}
+
+/**
+ * Cron (~1 min), a garantia: envia as que já estão prontas, expira as sem
+ * RECEIVED em 30 min e fecha envios interrompidos (sem reenviar).
+ */
+export async function processPendingAdvertisements(
+  limit = 50,
+  deps: AdvertisementDispatchDeps = defaultAdvertisementDispatchDeps
+): Promise<{ processed: number; sent: number; expired: number; waiting: number; skipped?: "tabela_ausente" }> {
+  let rows: { id: string }[];
+  try {
+    // A reserva (SENDING) só acontece até ~30 min depois do recibo; criada
+    // há mais de 30 + 15 min e ainda SENDING = função caiu no meio.
+    await deps.failStuck(
+      new Date(deps.now().getTime() - ADVERTISEMENT_RECEIPT_TIMEOUT_MS - ADVERTISEMENT_SENDING_STUCK_MS)
+    );
+    rows = await deps.listPending(limit);
+  } catch (err) {
+    if (isMissingTableError(err)) return { processed: 0, sent: 0, expired: 0, waiting: 0, skipped: "tabela_ausente" };
+    throw err;
+  }
+  let sent = 0;
+  let expired = 0;
+  let waiting = 0;
+  for (const row of rows) {
+    const outcome = await processPendingAdvertisement(row.id, { wait: false }, deps);
+    if (outcome.status === "sent") sent++;
+    else if (outcome.status === "expired") expired++;
+    else if (outcome.status === "waiting") waiting++;
+    if (outcome.status !== "waiting") await logOutcome("advertisement.dispatch", { deliveryId: row.id, via: "cron", ...outcome });
+  }
+  return { processed: rows.length, sent, expired, waiting };
 }
 
 /**
