@@ -37,11 +37,13 @@ const REQUEST_TIMEOUT_MS = 15_000;
 export function buildLinkButtonsBody(
   to: string,
   text: string,
-  buttons: LinkButtonAction[]
+  buttons: LinkButtonAction[],
+  image?: string
 ): Record<string, unknown> {
   return {
     phone: to,
     message: text,
+    ...(image ? { image } : {}),
     buttonActions: buttons.map((b) => ({ id: b.id, type: "URL", url: b.url, label: b.label })),
   };
 }
@@ -538,13 +540,46 @@ export class ZApiProvider implements WhatsappProvider {
     config: WhatsappConnectionConfig,
     to: string,
     text: string,
-    buttons: LinkButtonAction[]
+    buttons: LinkButtonAction[],
+    options?: { image?: string }
   ): Promise<SendLinkButtonsResult> {
-    const { result, failure } = await this.postJsonDetailed(config, "send-button-actions", buildLinkButtonsBody(to, text, buttons));
+    const { result, failure } = await this.postJsonDetailed(
+      config,
+      "send-button-actions",
+      buildLinkButtonsBody(to, text, buttons, options?.image)
+    );
     // Only an HTTP error (Z-API answered and refused) is safe to resend as
     // text. A timeout or a dropped connection may mean Z-API already got
     // it, so we never resend then (no duplicate message for the passenger).
     return { ...result, fallbackSafe: failure === "http" };
+  }
+
+  /** `DELETE .../messages?messageId=&phone=&owner=true` — "apagar para
+   * todos" (developer.z-api.io/message/delete-message). WhatsApp only
+   * accepts it for about 2 days after the send. **Docs only, not yet
+   * confirmed against a live instance.** */
+  async deleteMessage(
+    config: WhatsappConnectionConfig,
+    phone: string,
+    messageId: string
+  ): Promise<SendMessageResult> {
+    const query = new URLSearchParams({ messageId, phone, owner: "true" });
+    const url = `${trimTrailingSlash(config.apiUrl)}/messages?${query.toString()}`;
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(url, { method: "DELETE", headers: buildHeaders(config.apiToken) });
+    } catch {
+      return { ok: false, message: "Falha de comunicação com a instância." };
+    }
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      return {
+        ok: false,
+        message: (data as { error?: string } | null)?.error ?? `Erro ao apagar (HTTP ${response.status}).`,
+        raw: data,
+      };
+    }
+    return { ok: true, message: "Mensagem apagada.", raw: data };
   }
 
   /** Shared POST-JSON-parse-response plumbing behind send-text/send-image —

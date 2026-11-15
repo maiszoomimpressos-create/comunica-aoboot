@@ -12,6 +12,7 @@ import {
   Headset,
   ListChecks,
   Tags,
+  Megaphone,
 } from "lucide-react";
 import type { PermissionCode } from "@/lib/rbac/permissions";
 
@@ -54,6 +55,13 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ListChecks,
     permission: "whatsapp.view",
     ready: false,
+  },
+  {
+    label: "Publicidades",
+    href: (slug) => `/app/${slug}/modulos/whatsapp/publicidades`,
+    icon: Megaphone,
+    permission: "whatsapp.view",
+    ready: true,
   },
   {
     label: "Segmentos",

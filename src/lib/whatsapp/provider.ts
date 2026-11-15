@@ -95,11 +95,22 @@ export interface WhatsappProvider {
   getConnectedPhone(config: WhatsappConnectionConfig): Promise<GetConnectedPhoneResult>;
   /** Optional: text + clickable "open link" buttons in one message (Z-API
    * `send-button-actions`). Providers without it just get plain text via
-   * sendTextWithLinkButtons (send-with-link-buttons.ts). Never throws. */
+   * sendTextWithLinkButtons (send-with-link-buttons.ts). Never throws.
+   * `options.image` (URL or data URI) puts an image on top of the same
+   * balloon (blocos da mensagem, see lib/notifications/message-blocks.ts). */
   sendLinkButtons?(
     config: WhatsappConnectionConfig,
     to: string,
     text: string,
-    buttons: LinkButtonAction[]
+    buttons: LinkButtonAction[],
+    options?: { image?: string }
   ): Promise<SendLinkButtonsResult>;
+  /** Optional: "apagar para todos" of a message this number sent (Z-API
+   * `DELETE /messages`). WhatsApp only allows it for about 2 days after
+   * sending. Used by Publicidades "Apagar depois de". Never throws. */
+  deleteMessage?(
+    config: WhatsappConnectionConfig,
+    phone: string,
+    messageId: string
+  ): Promise<SendMessageResult>;
 }

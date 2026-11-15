@@ -22,6 +22,7 @@ import {
 import { renderCustomMessageTemplate } from "@/services/custom-notification-type.service";
 import { resolveLinkButtons } from "@/lib/notifications/custom-link-buttons";
 import { sendTextWithLinkButtons } from "@/lib/whatsapp/send-with-link-buttons";
+import { scheduleAdvertisementAfterNotification } from "@/services/advertisement-schedule.service";
 import type {
   QrCodeResult,
   SendMessageResult,
@@ -817,6 +818,19 @@ export async function sendPurchaseConfirmation(
     notificationType: resolvedKey,
     result,
   });
+
+  // Publicidades: depois de um envio com sucesso, agenda (after(), alguns
+  // segundos depois) no máximo UMA publicidade ativa ligada a esta função.
+  // Nunca lança e nunca atrasa esta resposta (ver advertisement-dispatch.service.ts).
+  if (result.ok) {
+    scheduleAdvertisementAfterNotification({
+      connectionId: connection.id,
+      tenantId: connection.tenantId,
+      providerKey: connection.provider.key,
+      to: input.to,
+      notificationType: resolvedKey,
+    });
+  }
 
   return result;
 }

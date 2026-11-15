@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { dispatchDueCampaigns } from "@/services/campaign-dispatcher.service";
+import { deleteExpiredAdvertisementMessages } from "@/services/advertisement-dispatch.service";
 
 /**
  * Ticked by an external pinger (e.g. cron-job.org) roughly once a minute —
@@ -27,7 +28,13 @@ export async function POST(request: NextRequest) {
   }
 
   const summary = await dispatchDueCampaigns();
-  return NextResponse.json({ ok: true, ...summary });
+  // Publicidades "Apagar depois de" pegam carona neste tique (~1x/min).
+  // Best-effort: um erro aqui nunca afeta as campanhas.
+  const advertisementCleanup = await deleteExpiredAdvertisementMessages().catch((err) => {
+    console.error("[cron/campaign-dispatcher] advertisement cleanup failed", err);
+    return null;
+  });
+  return NextResponse.json({ ok: true, ...summary, advertisementCleanup });
 }
 
 // Most external cron/pinger services default to GET — accept it too so

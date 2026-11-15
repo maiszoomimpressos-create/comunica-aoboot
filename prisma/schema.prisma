@@ -141,6 +141,7 @@ model Organization {
   campaigns             Campaign[]
   setores               Setor[]
   segmentos             Segmento[]
+  advertisements        Advertisement[]
 
   @@index([status])
   @@map("organization")
@@ -494,6 +495,7 @@ model ChannelConnection {
   customNotificationTypes  CustomNotificationType[]
   segmentos                Segmento[]
   roleScopes               RoleConnectionScope[]
+  advertisements           Advertisement[]
 
   @@index([tenantId, channelId])
   @@map("channel_connection")
@@ -1455,4 +1457,83 @@ model AuditLog {
   @@index([tenantId, createdAt])
   @@index([actorUserId])
   @@map("audit_log")
+}
+
+// Publicidades (módulo WhatsApp > Publicidades): banner + texto + botão
+// opcional enviado UMA vez, alguns segundos depois de uma função (ex.:
+// recibo corrida_mai_drive) sair com sucesso para aquele destinatário. Ver
+// advertisement-dispatch.service.ts. Rodízio por `lastSentAt` (a mais
+// antiga sai primeiro) e limite de frequência por destinatário.
+model Advertisement {
+  id          String  @id @default(cuid())
+  name        String
+  imageUrl    String?
+  messageText String
+  buttonLabel String?
+  buttonUrl   String?
+  active      Boolean @default(true)
+
+  // Período em que pode disparar — nulo = sem limite daquele lado.
+  startsAt DateTime?
+  endsAt   DateTime?
+
+  // Funções (CustomNotificationType.key ou tipo do catálogo) que disparam
+  // esta publicidade depois de um envio com sucesso.
+  triggerTypeKeys String[] @default([])
+
+  // "PER_DAY" = no máximo `frequencyValue` publicidades por destinatário
+  // em 24h; "EVERY_N_SENDS" = uma a cada `frequencyValue` envios da função
+  // para o mesmo destinatário. Contado entre TODAS as publicidades da
+  // conexão, para o passageiro não receber duas no mesmo dia.
+  frequencyMode  String @default("PER_DAY")
+  frequencyValue Int    @default(1)
+
+  // Nulo = não apagar. Senão apaga para todos (Z-API DELETE /messages)
+  // depois dessas horas — o WhatsApp só deixa até ~2 dias.
+  deleteAfterHours Int?
+
+  lastSentAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  tenantId     String
+  organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  deliveries AdvertisementDelivery[]
+
+  @@index([connectionId, active])
+  @@index([tenantId])
+  @@map("advertisement")
+}
+
+// Cada envio de publicidade (contagem, limite de frequência, relatório e
+// "Apagar depois de"). `contactKey` = hash do telefone (ver contactTargetKey
+// em ack-silence.service.ts); `recipientPhone` só fica guardado enquanto
+// a mensagem ainda vai ser apagada, e é limpo depois.
+model AdvertisementDelivery {
+  id               String    @id @default(cuid())
+  connectionId     String
+  contactKey       String
+  recipientPhone   String?
+  notificationType String
+  // "SENT" | "FAILED"
+  status           String
+  messageIds       String[]  @default([])
+  error            String?
+  deleteAt         DateTime?
+  deletedAt        DateTime?
+  deleteAttempts   Int       @default(0)
+  deleteError      String?
+  createdAt        DateTime  @default(now())
+
+  advertisementId String
+  advertisement   Advertisement @relation(fields: [advertisementId], references: [id], onDelete: Cascade)
+
+  @@index([advertisementId, createdAt])
+  @@index([connectionId, contactKey, createdAt])
+  @@index([deleteAt])
+  @@map("advertisement_delivery")
 }
