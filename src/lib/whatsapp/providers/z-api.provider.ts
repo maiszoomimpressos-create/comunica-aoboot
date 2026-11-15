@@ -3,11 +3,13 @@ import type {
   ContactNameResult,
   GetConnectedPhoneResult,
   GroupParticipantsResult,
+  LinkButtonAction,
   ListContactsResult,
   ListGroupsResult,
   ProviderContact,
   ProviderGroup,
   QrCodeResult,
+  SendLinkButtonsResult,
   SendMessageOptions,
   SendMessageResult,
   TestConnectionResult,
@@ -28,6 +30,21 @@ function delayFields(options?: SendMessageOptions): Record<string, number> {
 }
 
 const REQUEST_TIMEOUT_MS = 15_000;
+
+/** JSON body for Z-API `send-button-actions` with URL buttons only —
+ * exported so tests/previews can show exactly what goes out (no token:
+ * the instance token lives in the URL, never in the body). */
+export function buildLinkButtonsBody(
+  to: string,
+  text: string,
+  buttons: LinkButtonAction[]
+): Record<string, unknown> {
+  return {
+    phone: to,
+    message: text,
+    buttonActions: buttons.map((b) => ({ id: b.id, type: "URL", url: b.url, label: b.label })),
+  };
+}
 
 function trimTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "");
@@ -512,6 +529,24 @@ export class ZApiProvider implements WhatsappProvider {
     return this.postJson(config, "send-audio", { phone: to, audio, ...delayFields(options) });
   }
 
+  /** `send-button-actions` — text + up to 3 action buttons (here only type
+   * URL). Body per developer.z-api.io/message/send-button-actions:
+   * `{ phone, message, buttonActions: [{ id, type: "URL", url, label }] }`.
+   * Buttons don't render on every WhatsApp client (Z-API "button status"
+   * tip), so callers keep the links in `message` too. */
+  async sendLinkButtons(
+    config: WhatsappConnectionConfig,
+    to: string,
+    text: string,
+    buttons: LinkButtonAction[]
+  ): Promise<SendLinkButtonsResult> {
+    const { result, failure } = await this.postJsonDetailed(config, "send-button-actions", buildLinkButtonsBody(to, text, buttons));
+    // Only an HTTP error (Z-API answered and refused) is safe to resend as
+    // text. A timeout or a dropped connection may mean Z-API already got
+    // it, so we never resend then (no duplicate message for the passenger).
+    return { ...result, fallbackSafe: failure === "http" };
+  }
+
   /** Shared POST-JSON-parse-response plumbing behind send-text/send-image —
    * same endpoint family, same response envelope ({ zaapId, messageId, id }
    * on success), only the path and body differ. */
@@ -520,6 +555,14 @@ export class ZApiProvider implements WhatsappProvider {
     endpoint: string,
     body: Record<string, unknown>
   ): Promise<SendMessageResult> {
+    return (await this.postJsonDetailed(config, endpoint, body)).result;
+  }
+
+  private async postJsonDetailed(
+    config: WhatsappConnectionConfig,
+    endpoint: string,
+    body: Record<string, unknown>
+  ): Promise<{ result: SendMessageResult; failure: "timeout" | "network" | "http" | null }> {
     const url = `${trimTrailingSlash(config.apiUrl)}/${endpoint}`;
 
     let response: Response;
@@ -529,20 +572,27 @@ export class ZApiProvider implements WhatsappProvider {
         headers: buildHeaders(config.apiToken, { "Content-Type": "application/json" }),
         body: JSON.stringify(body),
       });
-    } catch {
-      return { ok: false, message: "Falha de comunicação com a instância." };
+    } catch (error) {
+      const timedOut = error instanceof Error && error.name === "AbortError";
+      return {
+        result: { ok: false, message: "Falha de comunicação com a instância." },
+        failure: timedOut ? "timeout" : "network",
+      };
     }
 
     const data = await response.json().catch(() => null);
     if (!response.ok) {
       return {
-        ok: false,
-        message:
-          (data as { error?: string } | null)?.error ?? `Erro ao enviar (HTTP ${response.status}).`,
-        raw: data,
+        result: {
+          ok: false,
+          message:
+            (data as { error?: string } | null)?.error ?? `Erro ao enviar (HTTP ${response.status}).`,
+          raw: data,
+        },
+        failure: "http",
       };
     }
 
-    return { ok: true, message: "Mensagem enviada com sucesso.", raw: data };
+    return { result: { ok: true, message: "Mensagem enviada com sucesso.", raw: data }, failure: null };
   }
 }

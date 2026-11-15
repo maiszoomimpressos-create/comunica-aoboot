@@ -45,6 +45,21 @@ export interface SendMessageResult {
   raw?: unknown;
 }
 
+/** One "open a link" button (Z-API `buttonActions` item of type URL). */
+export interface LinkButtonAction {
+  id: string;
+  label: string;
+  url: string;
+}
+
+/** Result of a send with link buttons. `fallbackSafe` is true only when the
+ * provider answered with an HTTP error (it refused the message) — resending
+ * as plain text then can't duplicate it. A timeout, a dropped connection or
+ * a 2xx is never fallbackSafe (the message may already be on its way). */
+export interface SendLinkButtonsResult extends SendMessageResult {
+  fallbackSafe: boolean;
+}
+
 /** Optional per-send pacing, forwarded as-is to the provider. Z-API shows
  * "Digitando..."/"Gravando áudio..." to the recipient for `delayTyping`
  * seconds (1-15) before the message lands, then waits `delayMessage`

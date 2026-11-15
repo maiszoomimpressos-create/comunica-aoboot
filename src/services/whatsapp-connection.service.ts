@@ -20,6 +20,8 @@ import {
   type CustomNotificationField,
 } from "@/repositories/custom-notification-type.repository";
 import { renderCustomMessageTemplate } from "@/services/custom-notification-type.service";
+import { resolveLinkButtons } from "@/lib/notifications/custom-link-buttons";
+import { sendTextWithLinkButtons } from "@/lib/whatsapp/send-with-link-buttons";
 import type {
   QrCodeResult,
   SendMessageResult,
@@ -784,9 +786,27 @@ export async function sendPurchaseConfirmation(
       )}`;
   const message = input.note?.trim() ? `${baseMessage}\n\n${input.note.trim()}` : baseMessage;
 
-  const result = input.qrData
-    ? await provider.sendImage(config, input.to, await QRCode.toDataURL(input.qrData), message)
-    : await provider.sendMessage(config, input.to, message);
+  // Função personalizada com botões de link (ver custom-link-buttons.ts):
+  // vai por send-button-actions; sem botões resolvidos, texto como sempre.
+  // Os links continuam no texto (botão não aparece em todo celular).
+  const linkButtons = customType && !input.qrData ? resolveLinkButtons(customType.linkButtons, details) : [];
+  const buttonsResult =
+    !input.qrData && linkButtons.length > 0
+      ? await sendTextWithLinkButtons(provider, config, input.to, message, linkButtons)
+      : null;
+  const result: SendMessageResult = buttonsResult
+    ? buttonsResult
+    : input.qrData
+      ? await provider.sendImage(config, input.to, await QRCode.toDataURL(input.qrData), message)
+      : await provider.sendMessage(config, input.to, message);
+  if (buttonsResult?.buttonsError) {
+    await logBotEvent("warn", "notification.link_buttons_failed", {
+      connectionId: connection.id,
+      notificationType: resolvedKey,
+      via: buttonsResult.via,
+      error: buttonsResult.buttonsError,
+    });
+  }
 
   // Marca o envio (AuditLog, sem migração) pro silêncio pós-notificação -
   // ver ack-silence.service.ts. Best-effort, nunca lança.

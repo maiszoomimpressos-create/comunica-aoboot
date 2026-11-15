@@ -124,10 +124,22 @@ export function normalizeTemplateNewlines(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
+/** `{{?chave}}` = marcador condicional invisível: a linha só aparece quando
+ * `chave` veio preenchida, e o marcador em si some do texto. Serve pra
+ * títulos que dependem de um campo de outra linha (ex.: "📊 *Entenda nossas
+ * tarifas*" logo acima de `{{link_tarifas}}`). */
+export const CONDITIONAL_MARKER_RE = /\{\{\?(\w+)\}\}/g;
+
+/** Every field key the template references, as `{{chave}}` or `{{?chave}}`. */
+export function templateReferencedKeys(messageTemplate: string): string[] {
+  return [...messageTemplate.matchAll(/\{\{\??(\w+)\}\}/g)].map((m) => m[1]);
+}
+
 /** Deterministic render used at send time and in the setup preview.
  * Optional fields drop their whole line when the value is missing — the
  * template is split on real newlines and blank lines are kept, never
- * collapsed. */
+ * collapsed. A `{{?chave}}` marker drops its line whenever `chave` is
+ * missing (required or not) and is removed from the output. */
 export function renderCustomMessageTemplate(
   messageTemplate: string,
   fields: CustomNotificationField[],
@@ -137,10 +149,19 @@ export function renderCustomMessageTemplate(
   const values: NotificationDetails = { ...details, nome_empresa: businessName };
   const optionalKeys = new Set(fields.filter((f) => f.required === false).map((f) => f.key));
   const lines = normalizeTemplateNewlines(messageTemplate).split("\n").filter((line) => {
+    const conditional = [...line.matchAll(CONDITIONAL_MARKER_RE)].map((m) => m[1]);
+    if (conditional.some((key) => isMissingDetailValue(values[key]))) return false;
     const refs = [...line.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]);
     return !refs.some((key) => optionalKeys.has(key) && isMissingDetailValue(values[key]));
   });
-  const rendered = lines.map((line) => line.replace(/\{\{(\w+)\}\}/g, (_, key: string) => values[key]?.trim() ?? "")).join("\n");
+  const rendered = lines
+    .map((line) =>
+      line
+        .replace(CONDITIONAL_MARKER_RE, "")
+        .replace(/[ \t]+$/, "")
+        .replace(/\{\{(\w+)\}\}/g, (_, key: string) => values[key]?.trim() ?? "")
+    )
+    .join("\n");
   // Linhas opcionais removidas podem deixar linhas em branco seguidas; junta numa só.
   return rendered.replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, "\n\n").trim();
 }

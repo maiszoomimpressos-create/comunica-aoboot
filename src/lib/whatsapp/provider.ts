@@ -2,10 +2,12 @@ import type {
   ContactNameResult,
   GetConnectedPhoneResult,
   GroupParticipantsResult,
+  LinkButtonAction,
   ListContactsResult,
   ListGroupsResult,
   QrCodeResult,
   SendMessageOptions,
+  SendLinkButtonsResult,
   SendMessageResult,
   TestConnectionResult,
   WhatsappConnectionConfig,
@@ -91,4 +93,13 @@ export interface WhatsappProvider {
    * automatically in sync with whatever device actually got QR-paired,
    * instead of requiring a manual edit every time. Never throws. */
   getConnectedPhone(config: WhatsappConnectionConfig): Promise<GetConnectedPhoneResult>;
+  /** Optional: text + clickable "open link" buttons in one message (Z-API
+   * `send-button-actions`). Providers without it just get plain text via
+   * sendTextWithLinkButtons (send-with-link-buttons.ts). Never throws. */
+  sendLinkButtons?(
+    config: WhatsappConnectionConfig,
+    to: string,
+    text: string,
+    buttons: LinkButtonAction[]
+  ): Promise<SendLinkButtonsResult>;
 }

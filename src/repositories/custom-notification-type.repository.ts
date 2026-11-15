@@ -6,14 +6,18 @@ import {
 } from "@/lib/notifications/custom-function-history";
 
 import type { CustomNotificationField } from "@/lib/notifications/custom-message";
+import { parseCustomLinkButtons, type CustomLinkButton } from "@/lib/notifications/custom-link-buttons";
+export type { CustomLinkButton } from "@/lib/notifications/custom-link-buttons";
 export type { CustomNotificationField, FieldValueType } from "@/lib/notifications/custom-message";
 export type { CustomFunctionAiHistoryEntry } from "@/lib/notifications/custom-function-history";
 
 /**
  * `fields` JSON is either a plain CustomNotificationField[] (legacy rows)
- * or `{ fields, aiDescription?, history? }` so the original "Descrever com IA"
- * text and later AI add/edit requests can be stored without a new column.
- * Callers always receive a decoded array plus `aiDescription` and `history`.
+ * or `{ fields, aiDescription?, history?, linkButtons? }` so the original
+ * "Descrever com IA" text, later AI add/edit requests and optional link
+ * buttons (custom-link-buttons.ts) can be stored without a new column.
+ * Callers always receive a decoded array plus `aiDescription`, `history`
+ * and `linkButtons`.
  * Existing rows are left as-is until they are saved again with a prompt or
  * a confirmed AI request — listing/hydrate never writes back.
  */
@@ -23,50 +27,63 @@ export type StoredCustomFields =
       fields: CustomNotificationField[];
       aiDescription?: string;
       history?: CustomFunctionAiHistoryEntry[];
+      linkButtons?: CustomLinkButton[];
     };
 
 export function parseStoredCustomFields(raw: unknown): {
   fields: CustomNotificationField[];
   aiDescription: string | null;
   history: CustomFunctionAiHistoryEntry[];
+  linkButtons: CustomLinkButton[];
 } {
   if (Array.isArray(raw)) {
-    return { fields: raw as CustomNotificationField[], aiDescription: null, history: [] };
+    return { fields: raw as CustomNotificationField[], aiDescription: null, history: [], linkButtons: [] };
   }
   if (raw && typeof raw === "object" && Array.isArray((raw as { fields?: unknown }).fields)) {
     const stored = raw as {
       fields: CustomNotificationField[];
       aiDescription?: unknown;
       history?: unknown;
+      linkButtons?: unknown;
     };
     const text = typeof stored.aiDescription === "string" ? stored.aiDescription.trim() : "";
     return {
       fields: stored.fields,
       aiDescription: text || null,
       history: parseCustomFunctionAiHistory(stored.history),
+      linkButtons: parseCustomLinkButtons(stored.linkButtons),
     };
   }
-  return { fields: [], aiDescription: null, history: [] };
+  return { fields: [], aiDescription: null, history: [], linkButtons: [] };
 }
 
 export function encodeStoredCustomFields(
   fields: CustomNotificationField[],
   aiDescription?: string | null,
-  history?: CustomFunctionAiHistoryEntry[] | null
+  history?: CustomFunctionAiHistoryEntry[] | null,
+  linkButtons?: CustomLinkButton[] | null
 ): Prisma.InputJsonValue {
   const text = aiDescription?.trim() ?? "";
   const entries = history && history.length > 0 ? history : null;
-  if (!text && !entries) return fields as unknown as Prisma.InputJsonValue;
+  const buttons = linkButtons && linkButtons.length > 0 ? linkButtons : null;
+  if (!text && !entries && !buttons) return fields as unknown as Prisma.InputJsonValue;
   return {
     fields,
     ...(text ? { aiDescription: text } : {}),
     ...(entries ? { history: entries } : {}),
+    ...(buttons ? { linkButtons: buttons } : {}),
   } as unknown as Prisma.InputJsonValue;
 }
 
 function hydrateCustomNotificationType<T extends { fields: unknown }>(row: T) {
   const parsed = parseStoredCustomFields(row.fields);
-  return { ...row, fields: parsed.fields, aiDescription: parsed.aiDescription, history: parsed.history };
+  return {
+    ...row,
+    fields: parsed.fields,
+    aiDescription: parsed.aiDescription,
+    history: parsed.history,
+    linkButtons: parsed.linkButtons,
+  };
 }
 
 /**
@@ -149,7 +166,9 @@ export type UpdateCustomNotificationTypeData = {
  * editáveis. Scoped por connectionId no próprio `where`, igual a
  * deleteSegmento/renameList — nunca edita a função de outra conexão.
  * Se o caller não mandar `history` ou `aiDescription`, o valor já gravado
- * é preservado — uma edição manual não apaga o histórico de pedidos à IA. */
+ * é preservado — uma edição manual não apaga o histórico de pedidos à IA.
+ * `linkButtons` (botões de link) também são sempre preservados — a tela
+ * ainda não edita botões, então salvar pela tela nunca os apaga. */
 export async function updateCustomNotificationType(
   connectionId: string,
   key: string,
@@ -162,7 +181,7 @@ export async function updateCustomNotificationType(
   const nextHistory = history !== undefined ? history : current.history;
   return prisma.customNotificationType.updateMany({
     where: { connectionId, key, ...activeCustomNotificationTypeWhere },
-    data: { ...rest, fields: encodeStoredCustomFields(fields, nextAi, nextHistory) },
+    data: { ...rest, fields: encodeStoredCustomFields(fields, nextAi, nextHistory, current.linkButtons) },
   });
 }
 

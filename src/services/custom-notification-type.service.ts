@@ -12,7 +12,7 @@ import {
   type CustomNotificationField,
 } from "@/repositories/custom-notification-type.repository";
 import { generateCustomNotificationTypeDraft } from "./notification-type-generator.service";
-import { RESERVED_TEMPLATE_KEYS } from "@/lib/notifications/custom-message";
+import { RESERVED_TEMPLATE_KEYS, templateReferencedKeys } from "@/lib/notifications/custom-message";
 
 export { renderCustomMessageTemplate } from "@/lib/notifications/custom-message";
 
@@ -82,7 +82,7 @@ function validateFieldsAndTemplate(input: { fields: CustomNotificationField[]; m
   if (!input.messageTemplate.trim()) throw new ValidationError("Informe o texto da mensagem.");
 
   const declaredKeys = new Set(input.fields.map((f) => f.key));
-  const usedKeys = [...input.messageTemplate.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]);
+  const usedKeys = templateReferencedKeys(input.messageTemplate);
   const undeclared = usedKeys.find((k) => !declaredKeys.has(k) && !RESERVED_TEMPLATE_KEYS.has(k));
   if (undeclared) {
     throw new ValidationError(`O texto usa "{{${undeclared}}}", mas esse campo não foi declarado.`);
