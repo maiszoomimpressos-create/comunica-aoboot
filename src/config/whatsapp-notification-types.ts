@@ -339,6 +339,17 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     },
   },
   {
+    key: "convite_app",
+    label: "Convite para baixar o app (passageiro)",
+    description: "Convida o passageiro a baixar o app, com o link de download.",
+    requiresQr: false,
+    requiredDetailKeys: ["link_app"],
+    serviceKey: "purchase_confirmation",
+    niches: ["MOBILIDADE_CORRIDAS"],
+    buildMessage: ({ businessName, details }) =>
+      `Obrigado por andar de ${bold(businessName)}.\n\nNa próxima, peça pelo app: é mais rápido e você acompanha a corrida na tela.\n\nBaixe grátis o ${businessName} Passageiro:\n${details.link_app.trim()}`,
+  },
+  {
     key: "codigo_verificacao",
     label: "Código de verificação (2FA)",
     description: "Manda um código de acesso temporário — segundo fator de login num painel ou terminal.",
