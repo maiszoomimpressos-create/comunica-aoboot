@@ -13,6 +13,9 @@ const bodySchema = z.object({
   details: z.record(z.string(), z.string()).optional(),
   qrData: z.string().min(1).optional(),
   note: z.string().max(500, "Máximo de 500 caracteres.").optional(),
+  // Recibo de corrida: canal do pedido ("app", "whatsapp", "motorista",
+  // "macaneta"). Opcional; ver docs/RECIBO-ORIGEM-DO-PEDIDO.md.
+  requestSource: z.string().max(40, "Máximo de 40 caracteres.").optional(),
 });
 
 /**

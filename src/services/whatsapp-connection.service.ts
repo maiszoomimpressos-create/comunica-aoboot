@@ -58,6 +58,11 @@ import { handleInboundMessage } from "./bot-attendant.service";
 import { tryClaimInboundMessage } from "@/repositories/bot.repository";
 import { tryHandleRelayMessage } from "@/services/relay-session.service";
 import { isRideReceiptNotificationType } from "@/config/ride-receipt-app-promo";
+import {
+  planPostNotificationPromotions,
+  resolveRideRequestSource,
+  rideAllowsPromotions,
+} from "@/lib/notifications/ride-request-source";
 import { scheduleRideReceiptFollowUp } from "@/services/ride-receipt-follow-up.service";
 import {
   applyCampaignMessageStatus,
@@ -723,6 +728,11 @@ export interface PurchaseConfirmationInput {
    * from the caller — deliberately opt-in and additive, never a
    * replacement for the structured template. */
   note?: string;
+  /** Recibo de corrida: onde a corrida foi pedida ("app", "whatsapp",
+   * "motorista", "macaneta"). Pedida pelo app → sem divulgação do app depois
+   * do recibo. Opcional — também aceito em details.canal_pedido. Ver
+   * lib/notifications/ride-request-source.ts. */
+  requestSource?: string;
 }
 
 /**
@@ -858,13 +868,21 @@ export async function sendPurchaseConfirmation(
     result,
   });
 
-  // Recibo de corrida entregue (corrida_concluida ou a função
-  // corrida_mai_drive) → agenda (3-5 min depois) a imagem com o link do app
-  // na Play Store, se a conexão tiver isso ligado (ver
-  // ride-receipt-follow-up.service.ts). Nunca derruba a resposta do recibo,
-  // que já foi enviado.
+  // Depois do recibo de corrida (corrida_concluida ou a função
+  // corrida_mai_drive), a divulgação do app depende de ONDE a corrida foi
+  // pedida (ver lib/notifications/ride-request-source.ts):
+  //  - pelo app do passageiro → não manda nada (ele já tem o app);
+  //  - maçaneta / motorista / WhatsApp / sem origem informada → agenda a
+  //    imagem com o link da Play Store (3-5 min depois) se o card estiver
+  //    ligado; sem o card ligado, cai na Publicidade como antes. Nunca as duas.
+  // Nas demais funções a Publicidade segue igual. Nada aqui derruba a
+  // resposta do recibo, que já foi enviado.
+  const isRideReceipt = isRideReceiptNotificationType(resolvedKey);
+  const rideRequestSource = isRideReceipt
+    ? resolveRideRequestSource({ requestSource: input.requestSource, details })
+    : null;
   let rideAppPromoActive = false;
-  if (result.ok && isRideReceiptNotificationType(resolvedKey)) {
+  if (result.ok && isRideReceipt && rideAllowsPromotions(rideRequestSource)) {
     const followUp = await scheduleRideReceiptFollowUp({
       connectionId: connection.id,
       to: input.to,
@@ -879,16 +897,24 @@ export async function sendPurchaseConfirmation(
     });
     rideAppPromoActive = followUp?.active === true;
   }
+  const promotions = planPostNotificationPromotions({
+    isRideReceipt,
+    source: rideRequestSource,
+    appPromoActive: rideAppPromoActive,
+  });
+  if (result.ok && isRideReceipt && !rideAllowsPromotions(rideRequestSource)) {
+    await logBotEvent("info", "ride_promotions_skipped_app_request", {
+      connectionId: connection.id,
+      notificationType: resolvedKey,
+      requestSource: rideRequestSource,
+    });
+  }
 
   // Publicidades: depois de um envio com sucesso, põe na fila (after()) no
   // máximo UMA publicidade ativa ligada a esta função. Ela só sai quando o
   // recibo chegar no aparelho (RECEIVED) + 30 s; sem RECEIVED em 30 min,
   // expira. Nunca lança e nunca atrasa esta resposta.
-  // Exceção (pra o passageiro não receber duas divulgações): depois de um
-  // recibo de corrida numa conexão com a imagem do app (Play Store) ligada,
-  // a Publicidade NÃO é enfileirada — quem divulga ali é a imagem do app.
-  // Nas demais funções, e nas conexões sem a imagem ligada, nada muda.
-  if (result.ok && !rideAppPromoActive) {
+  if (result.ok && promotions.queueAdvertisement) {
     scheduleAdvertisementAfterNotification({
       connectionId: connection.id,
       tenantId: connection.tenantId,

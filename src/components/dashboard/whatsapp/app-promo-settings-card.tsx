@@ -148,7 +148,8 @@ export function AppPromoSettingsCard({
             <p className="text-sm text-muted-foreground">
               Entre 3 e 5 minutos depois do recibo da corrida (<strong>Corrida concluída</strong> ou a função
               <strong> corrida_mai_drive</strong>), o passageiro recebe uma
-              imagem com o link do app na Play Store.
+              imagem com o link do app na Play Store. Corridas pedidas pelo próprio app do passageiro não
+              recebem (ele já tem o app).
             </p>
           </div>
         </div>
