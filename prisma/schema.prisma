@@ -139,6 +139,7 @@ model Organization {
   contacts              Contact[]
   contactLists          ContactList[]
   campaigns             Campaign[]
+  tenantOptOuts         TenantOptOut[]
   setores               Setor[]
   segmentos             Segmento[]
   advertisements        Advertisement[]
@@ -496,6 +497,8 @@ model ChannelConnection {
   segmentos                Segmento[]
   roleScopes               RoleConnectionScope[]
   advertisements           Advertisement[]
+  appPromoSettings         AppPromoSettings?
+  rideReceiptFollowUps     RideReceiptFollowUp[]
 
   @@index([tenantId, channelId])
   @@map("channel_connection")
@@ -741,10 +744,30 @@ model Contact {
   id             String    @id @default(cuid())
   phone          String
   name           String?
+  // De onde veio `name` (ver lib/whatsapp/contact-name.ts): "agenda" (nome
+  // salvo na agenda do número conectado), "perfil" (nome do perfil do
+  // WhatsApp da pessoa), "whatsapp" (Z-API sem distinguir — chatName do
+  // webhook / sync antigo), "csv" ou "manual". Nome de CSV/manual nunca é
+  // sobrescrito pela Z-API.
+  nameSource     String?
   // "sync" = capturado da agenda do WhatsApp conectado; "import" = veio de
-  // um CSV importado (ver importContactsFromCsv). Cadastro manual
-  // avulso continua fora de escopo.
+  // um CSV importado (ver importContactsFromCsv); "manual" = cadastrado
+  // um a um pelo painel (createManualContact); "google_places" = captado
+  // da Google Places API (empresa/autônomo com telefone público — ver
+  // services/google-capture.service.ts).
   source         String    @default("sync")
+  // Contato frio: nunca falou com a empresa (captado do Google). Campanha
+  // com contato frio tem SAIR obrigatório, limite diário próprio e
+  // intervalo maior (lib/campaigns/cold-outreach.ts).
+  isCold         Boolean   @default(false)
+  // Origem da captação (só source "google_places"): place id do Google —
+  // o único dado do Places que os termos da Google deixam guardar sem
+  // prazo —, o texto da busca (categoria + cidade) e quando foi captado.
+  externalId     String?
+  captureQuery   String?
+  capturedAt     DateTime?
+  // "mobile" | "landline" (fixo) quando dá pra saber pelo número.
+  phoneType      String?
   optedOut       Boolean   @default(false)
   optedOutAt     DateTime?
   // "keyword" (respondeu SAIR/PARAR/...) | "manual" (bloqueio pelo painel)
@@ -854,10 +877,30 @@ model Campaign {
   id          String         @id @default(cuid())
   name        String
   messageText String
-  // "image" | "video" | null (texto puro)
-  mediaType   String?
-  mediaUrl    String?
-  status      CampaignStatus @default(DRAFT)
+  // "image" | "video" | "document" | "audio" | null (texto puro)
+  mediaType     String?
+  mediaUrl      String?
+  // Nome do arquivo mostrado no WhatsApp quando mediaType = "document".
+  mediaFileName String?
+  // Sequência de mensagens (ver src/lib/campaigns/sequence.ts): array de
+  // { type: text|image|video|document|audio, text, mediaUrl, fileName },
+  // 1 a 5 itens, enviados em ordem pra cada destinatário. null = campanha
+  // antiga: a sequência é derivada de messageText + mediaType/mediaUrl
+  // (partsFromCampaign). Com parts preenchido, messageText guarda só o
+  // resumo dos textos e mediaType/mediaUrl ficam null.
+  parts                  Json?
+  // A lista tinha contato frio (captado do Google) quando a campanha foi
+  // criada: SAIR obrigatório + limite diário/intervalo de contato frio.
+  coldOutreach           Boolean @default(false)
+  // Intervalo aleatório entre as partes de UM destinatário (segundos) —
+  // separado do intervalo entre destinatários.
+  minPartIntervalSeconds Int   @default(3)
+  maxPartIntervalSeconds Int   @default(6)
+  status        CampaignStatus @default(DRAFT)
+
+  // Início agendado (status SCHEDULED) — o dispatcher promove pra RUNNING
+  // quando chega a hora (ver promoteDueScheduledCampaigns).
+  scheduledStartAt DateTime?
 
   // Overrides opcionais desta campanha — null usa o padrão gravado em
   // ConnectionCampaignSettings da conexão. Sempre resolvidos via
@@ -903,7 +946,12 @@ enum CampaignRecipientStatus {
   PROCESSING
   SENT
   DELIVERED
+  // Confirmado pelo MessageStatusCallback da Z-API (READ/PLAYED).
+  READ
   FAILED
+  // phone-exists da Z-API disse que o número não tem WhatsApp — nunca
+  // chegou a ser enviado (não conta como falha operacional).
+  INVALID_NUMBER
   CANCELLED
   OPTED_OUT
 }
@@ -922,7 +970,23 @@ model CampaignRecipient {
   scheduledAt  DateTime?
   sentAt       DateTime?
   deliveredAt  DateTime?
+  readAt       DateTime?
   failedAt     DateTime?
+
+  // Token da execução do dispatcher que reivindicou a linha (claim atômico
+  // via UPDATE ... FOR UPDATE SKIP LOCKED) — só quem tem o token grava o
+  // resultado, então duas execuções nunca enviam a mesma mensagem.
+  claimToken        String?
+  // messageId devolvido pela Z-API no envio — liga o MessageStatusCallback
+  // (entregue/lido) a este destinatário.
+  providerMessageId String?
+  // Sequência: índice da próxima parte a enviar (0 = nenhuma saiu ainda).
+  // Gravado depois de CADA parte enviada — retentativa/retomada continua
+  // daqui, sem reenviar as que já saíram.
+  nextPartIndex  Int   @default(0)
+  // messageId de cada parte enviada, na ordem ([id0, id1, ...]). O status
+  // entregue/lido do destinatário segue a 1ª parte (providerMessageId).
+  partMessageIds Json?
 
   campaignId String
   campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
@@ -932,6 +996,8 @@ model CampaignRecipient {
 
   @@unique([campaignId, contactId])
   @@index([campaignId, status])
+  @@index([campaignId, status, scheduledAt])
+  @@index([providerMessageId])
   @@map("campaign_recipient")
 }
 
@@ -955,13 +1021,48 @@ model ConnectionCampaignSettings {
   minBatchPauseSeconds Int @default(15)
   maxBatchPauseSeconds Int @default(20)
 
-  // null = sem limite — a spec deste módulo é explícita: não existe um
-  // número "seguro" universal, então não assumimos um teto por padrão.
-  dailyLimit     Int?
+  // null = sem limite. Novas conexões nascem com 200/dia (ver
+  // CAMPAIGN_DEFAULTS) — o tenant pode subir ou limpar depois.
+  dailyLimit     Int?      @default(200)
   dailySentCount Int       @default(0)
   dailySentDate  DateTime?
 
   maxConsecutiveErrors Int @default(5)
+
+  // Liga/desliga o produto Campanhas nesta conexão — o dispatcher não
+  // envia nada quando false (campanhas ficam paradas, nada é perdido).
+  campaignsEnabled Boolean @default(true)
+
+  // Aquecimento de número novo: teto diário cresce dia a dia a partir do
+  // primeiro envio de campanha (warmupStartedAt) — ver lib/campaigns/pacing.ts.
+  warmupEnabled   Boolean   @default(true)
+  warmupStartedAt DateTime?
+
+  // Checa phone-exists na Z-API antes de cada envio.
+  verifyNumbersBeforeSend Boolean @default(true)
+
+  // Rodapé "Responda SAIR..." adicionado a toda mensagem de campanha.
+  optOutFooterEnabled Boolean @default(true)
+  optOutFooterText    String?
+
+  // Tentativas totais por destinatário (só erros temporários são retentados).
+  maxAttempts Int @default(3)
+
+  // Contatos frios (captados do Google): teto diário próprio (além do
+  // limite normal e do aquecimento) e intervalo maior entre contatos.
+  coldDailyLimit                Int @default(30)
+  coldDailySentCount            Int @default(0)
+  coldMinMessageIntervalSeconds Int @default(60)
+  coldMaxMessageIntervalSeconds Int @default(120)
+
+  // Último envio real desta conexão — o intervalo mínimo entre mensagens é
+  // medido a partir daqui, inclusive entre execuções diferentes do cron.
+  lastSentAt DateTime?
+
+  // Trava por conexão: só uma execução do dispatcher envia por este número
+  // por vez (UPDATE condicional; expira sozinha se o processo cair).
+  dispatchLockToken   String?
+  dispatchLockedUntil DateTime?
 
   updatedAt DateTime @updatedAt
 
@@ -969,6 +1070,24 @@ model ConnectionCampaignSettings {
   connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@map("connection_campaign_settings")
+}
+
+// Opt-out por EMPRESA (não por conexão): quem respondeu SAIR (ou foi
+// bloqueado no painel) não recebe campanha de nenhum número do tenant,
+// inclusive em contatos sincronizados/importados depois. `phone` é sempre
+// a chave normalizada (ver phoneKey em lib/whatsapp/phone-sanitize.ts).
+model TenantOptOut {
+  id        String   @id @default(cuid())
+  phone     String
+  // "keyword" | "manual"
+  source    String
+  createdAt DateTime @default(now())
+
+  tenantId     String
+  organization Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, phone])
+  @@map("tenant_opt_out")
 }
 
 // =====================================================================
@@ -1536,4 +1655,73 @@ model AdvertisementDelivery {
   @@index([connectionId, contactKey, createdAt])
   @@index([deleteAt])
   @@map("advertisement_delivery")
+}
+
+// =====================================================================
+// Pós-corrida: imagem com o link do app na Play Store
+// =====================================================================
+// Depois que um recibo de corrida (`corrida_concluida` ou a função
+// `corrida_mai_drive`, ver config/ride-receipt-app-promo.ts)
+// sai com sucesso, o MAIS ZAP — não o MAI Drive — agenda uma segunda
+// mensagem pro mesmo passageiro, entre 3 e 5 minutos depois: uma imagem com
+// legenda contendo o link do app. Configurável por conexão no painel
+// (modulos/whatsapp/funcoes); sem config ativa, nada é agendado. Ver
+// ride-receipt-follow-up.service.ts.
+
+model AppPromoSettings {
+  id           String   @id @default(cuid())
+  enabled      Boolean  @default(false)
+  // URL pública da imagem (upload via Vercel Blob no painel, ou URL colada).
+  imageUrl     String?
+  playStoreUrl String?
+  // Legenda opcional — null usa o texto padrão (DEFAULT_APP_PROMO_CAPTION).
+  // Aceita {{link}} e {{nome_empresa}}; se não tiver {{link}}, o link é
+  // acrescentado no fim automaticamente.
+  caption      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  connectionId String            @unique
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@map("app_promo_settings")
+}
+
+enum RideReceiptFollowUpStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+// Envio pendente persistido no banco (serverless na Vercel não tem worker
+// nem timer que sobreviva entre requisições) — processado pelo cron
+// (/api/cron/ride-follow-ups, também chamado a cada tick de
+// /api/cron/campaign-dispatcher). Mesmo esquema de lock de
+// CampaignRecipient: PENDING → PROCESSING atômico via updateMany, com
+// recuperação de linhas travadas.
+model RideReceiptFollowUp {
+  id               String                    @id @default(cuid())
+  // Hash de conexão + telefone + dados do recibo — o MAI Drive reenviar o
+  // mesmo recibo nunca agenda a imagem duas vezes.
+  idempotencyKey   String                    @unique
+  toPhone          String
+  status           RideReceiptFollowUpStatus @default(PENDING)
+  scheduledAt      DateTime
+  attempts         Int                       @default(0)
+  lockedAt         DateTime?
+  sentAt           DateTime?
+  lastError        String?
+  // messageId/zaapId que o provedor devolveu pro recibo (só rastreio).
+  receiptMessageId String?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledAt])
+  @@index([connectionId, createdAt])
+  @@map("ride_receipt_follow_up")
 }

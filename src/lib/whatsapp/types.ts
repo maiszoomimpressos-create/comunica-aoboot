@@ -43,6 +43,25 @@ export interface SendMessageResult {
   ok: boolean;
   message: string;
   raw?: unknown;
+  /** HTTP status da resposta do provedor (ausente em erro de rede). */
+  httpStatus?: number;
+  /** true quando nem chegou resposta (rede/timeout) — erro temporário. */
+  networkError?: boolean;
+  /** Id da mensagem no provedor (Z-API: `messageId`) — liga o callback de
+   * status (entregue/lido) ao envio. */
+  messageId?: string;
+}
+
+/** Resultado do phone-exists: `ok: false` = não deu pra verificar (rede,
+ * erro do provedor) — quem chama decide seguir sem a checagem. */
+export interface PhoneExistsResult {
+  ok: boolean;
+  exists?: boolean;
+  /** Número no formato que o WhatsApp reconhece (ex.: com o 9º dígito),
+   * quando o provedor devolve. */
+  phone?: string;
+  message: string;
+  raw?: unknown;
 }
 
 /** One "open a link" button (Z-API `buttonActions` item of type URL). */
@@ -84,6 +103,7 @@ export interface ContactNameResult {
   /** Present only when a real, human-set name was found — never a
    * formatted-phone-number fallback (see ZApiProvider.getContactName). */
   name?: string;
+  nameSource?: "agenda" | "perfil" | "whatsapp";
 }
 
 export interface ProviderContact {
@@ -91,6 +111,9 @@ export interface ProviderContact {
   /** Only ever a real, human-set name — same "not a formatted phone
    * number" filtering as ContactNameResult, applied per-entry. */
   name?: string;
+  /** "agenda" (name/short) ou "perfil" (vname/notify) — ver
+   * lib/whatsapp/contact-name.ts. Presente sempre que `name` estiver. */
+  nameSource?: "agenda" | "perfil" | "whatsapp";
 }
 
 export interface ListContactsResult {
@@ -98,6 +121,8 @@ export interface ListContactsResult {
   contacts: ProviderContact[];
   message: string;
   raw?: unknown;
+  /** Entradas descartadas por não serem telefone discável (@lid, grupo...). */
+  skipped?: number;
 }
 
 export interface ProviderGroup {
@@ -118,6 +143,7 @@ export interface GroupParticipant {
   phone: string;
   /** Only ever a real, human-set name — same filtering as ProviderContact. */
   name?: string;
+  nameSource?: "agenda" | "perfil" | "whatsapp";
 }
 
 export interface GroupParticipantsResult {
@@ -125,4 +151,7 @@ export interface GroupParticipantsResult {
   participants: GroupParticipant[];
   message: string;
   raw?: unknown;
+  /** Participantes descartados: o WhatsApp só mandou um id "@lid" (número
+   * real oculto) ou um valor que não é telefone. */
+  skipped?: number;
 }

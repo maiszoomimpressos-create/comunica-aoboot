@@ -11,11 +11,17 @@ import {
   listContactsNotInList,
   listContactsNotInListForTenant,
   upsertSyncedContacts,
-  findContactIdsByPhones,
   setContactOptOut,
   type ContactRow,
 } from "@/repositories/contact.repository";
-import { parseContactsCsv } from "@/lib/csv/parse-contacts-csv";
+import { normalizeCsvPhone } from "@/lib/csv/parse-contacts-csv";
+import {
+  applyTenantOptOutsToContacts,
+  listOptedOutPhoneKeys,
+  optOutPhoneForTenant,
+  removeTenantOptOut,
+} from "@/repositories/tenant-opt-out.repository";
+import { phoneKey } from "@/lib/whatsapp/phone-sanitize";
 import {
   listListsForConnection,
   listListsForTenant,
@@ -53,6 +59,8 @@ export interface SyncContactsResult {
   total: number;
   created: number;
   updated: number;
+  /** Entradas ignoradas (id @lid, grupo, valor que não é telefone). */
+  skipped?: number;
 }
 
 /** Pulls every contact from the connected WhatsApp's own address book and
@@ -87,8 +95,10 @@ export async function syncContactsFromConnection(
     tenantId,
     connectionId,
     connection.phoneNumber,
-    result.contacts.map((c) => ({ phone: c.phone, name: c.name }))
+    result.contacts.map((c) => ({ phone: c.phone, name: c.name, nameSource: c.nameSource }))
   );
+  // Quem já pediu descadastro em qualquer número da empresa continua fora.
+  await applyTenantOptOutsToContacts(tenantId);
 
   const extractedList = await getOrCreateExtractedListForConnection(
     tenantId,
@@ -107,7 +117,7 @@ export async function syncContactsFromConnection(
     await addContactsToListRepo(tenantId, extractedList.id, activeContactIds);
   }
 
-  return { total: result.contacts.length, created, updated };
+  return { total: result.contacts.length, created, updated, skipped: result.skipped ?? 0 };
 }
 
 export interface ContactsByListEntry {
@@ -136,13 +146,20 @@ export async function getContactsGroupedByList(
   );
 }
 
+/** Opt-out manual pelo painel vale pra EMPRESA inteira (todas as
+ * conexões, todos os contatos com esse telefone) — mesma regra do opt-out
+ * por palavra-chave. Desfazer também é por empresa. */
 export async function setContactOptOutStatus(
   tenantId: string,
   contactId: string,
   optedOut: boolean
 ): Promise<void> {
+  const contact = await prisma.contact.findFirst({ where: { id: contactId, tenantId }, select: { phone: true } });
+  if (!contact) throw new NotFoundError("Contato não encontrado.");
   const result = await setContactOptOut(tenantId, contactId, optedOut, "manual");
   if (result.count === 0) throw new NotFoundError("Contato não encontrado.");
+  if (optedOut) await optOutPhoneForTenant(tenantId, contact.phone, "manual");
+  else await removeTenantOptOut(tenantId, contact.phone);
 }
 
 /** Resolve o connectionId dono deste contato (Contact.connectionId é
@@ -182,52 +199,122 @@ export async function createAssembledContactList(tenantId: string, name: string)
   return createAssembledList(tenantId, trimmed);
 }
 
-export interface ImportCsvListResult {
-  listId: string;
-  imported: number;
-  skipped: number;
+/** Máximo de linhas por chamada de importação — o navegador lê e
+ * parseia o CSV inteiro localmente e manda em pedaços, então o limite de
+ * ~1 MB do corpo de uma Server Action nunca é atingido, seja qual for o
+ * tamanho do arquivo. */
+export const CSV_IMPORT_CHUNK_SIZE = 1000;
+
+export interface ImportCsvChunkInput {
+  /** null no primeiro pedaço — cria a lista montada e devolve o id. */
+  listId: string | null;
+  listName: string;
+  rows: { phone: string; name: string | null }[];
 }
 
-/** Importa uma lista a partir de um CSV (telefone + nome opcional) e monta
- * uma lista ASSEMBLED nova só com os contatos importados. Os contatos em si
- * ficam presos a `connectionId` (o Contact.connectionId do schema é
- * obrigatório, mesmo não havendo sincronização real de um aparelho aqui) —
- * por isso a importação acontece a partir da página de Campanhas de uma
- * conexão específica, com `source: "import"` pra diferenciar de `"sync"`. */
-export async function importContactsFromCsv(
+export interface ImportCsvChunkResult {
+  listId: string;
+  imported: number;
+  skippedInvalid: number;
+  skippedOptOut: number;
+}
+
+/** Importa um pedaço de um CSV (já parseado no navegador) numa lista
+ * montada. Os contatos ficam presos a `connectionId` (Contact.connectionId
+ * é obrigatório) com `source: "import"`. Regras:
+ * - telefone é re-normalizado aqui (nunca confia no cliente);
+ * - contato que já existe NÃO tem o nome sobrescrito (só preenche vazio);
+ * - quem está em opt-out (do contato ou da empresa) NÃO entra na lista. */
+export async function importCsvChunk(
   tenantId: string,
   connectionId: string,
-  listName: string,
-  csvText: string
-): Promise<ImportCsvListResult> {
-  const trimmedName = listName.trim();
-  if (!trimmedName) throw new ValidationError("Informe um nome para a lista.");
-
+  input: ImportCsvChunkInput
+): Promise<ImportCsvChunkResult> {
+  if (input.rows.length > CSV_IMPORT_CHUNK_SIZE) {
+    throw new ValidationError(`No máximo ${CSV_IMPORT_CHUNK_SIZE} linhas por envio.`);
+  }
   const connection = await getConnectionSummary(tenantId, connectionId);
   if (!connection) throw new NotFoundError("Conexão não encontrada.");
 
-  const { contacts, skipped } = parseContactsCsv(csvText);
-  if (contacts.length === 0) {
-    throw new ValidationError("Nenhum telefone válido encontrado no arquivo.");
+  let listId = input.listId;
+  if (listId) {
+    const list = await getListSummary(tenantId, listId);
+    if (!list || list.type !== "ASSEMBLED") throw new NotFoundError("Lista não encontrada.");
+  } else {
+    const trimmedName = input.listName.trim();
+    if (!trimmedName) throw new ValidationError("Informe um nome para a lista.");
+    listId = (await createAssembledList(tenantId, trimmedName)).id;
   }
+
+  const seen = new Set<string>();
+  const contacts: { phone: string; name?: string }[] = [];
+  let skippedInvalid = 0;
+  for (const row of input.rows) {
+    const phone = normalizeCsvPhone(row.phone);
+    if (!phone) {
+      skippedInvalid++;
+      continue;
+    }
+    if (seen.has(phone)) continue;
+    seen.add(phone);
+    contacts.push({ phone, name: row.name?.trim() || undefined });
+  }
+
+  if (contacts.length > 0) {
+    await upsertSyncedContacts(tenantId, connectionId, connection.phoneNumber, contacts, "import");
+    await applyTenantOptOutsToContacts(tenantId);
+  }
+
+  const rows = await prisma.contact.findMany({
+    where: { tenantId, connectionId, phone: { in: contacts.map((c) => c.phone) } },
+    select: { id: true, phone: true, optedOut: true },
+  });
+  const optedOutKeys = await listOptedOutPhoneKeys(tenantId);
+  const eligible = rows.filter((c) => !c.optedOut && !optedOutKeys.has(phoneKey(c.phone)));
+  const imported = await addContactsToListRepo(tenantId, listId, eligible.map((c) => c.id));
+
+  return { listId, imported, skippedInvalid, skippedOptOut: rows.length - eligible.length };
+}
+
+export interface CreateManualContactInput {
+  phone: string;
+  name: string | null;
+  listId: string | null;
+}
+
+/** Cadastro manual de UM contato (source "manual"), opcionalmente já
+ * adicionado a uma lista. O nome digitado vale (nameSource "manual") e a
+ * sincronização com a Z-API não troca mais; respeita o opt-out da empresa. */
+export async function createManualContact(tenantId: string, connectionId: string, input: CreateManualContactInput) {
+  const connection = await getConnectionSummary(tenantId, connectionId);
+  if (!connection) throw new NotFoundError("Conexão não encontrada.");
+
+  const phone = normalizeCsvPhone(input.phone);
+  if (!phone) throw new ValidationError("Telefone inválido — use DDD + número (ex.: 11 91234-5678).");
 
   await upsertSyncedContacts(
     tenantId,
     connectionId,
     connection.phoneNumber,
-    contacts.map((c) => ({ phone: c.phone, name: c.name ?? undefined })),
-    "import"
+    [{ phone, name: input.name?.trim() || undefined }],
+    "manual"
   );
-  const contactIds = await findContactIdsByPhones(
-    tenantId,
-    connectionId,
-    contacts.map((c) => c.phone)
-  );
+  const contact = await prisma.contact.findUnique({ where: { connectionId_phone: { connectionId, phone } } });
+  if (!contact) throw new ConflictError("Não foi possível salvar o contato.");
+  await applyTenantOptOutsToContacts(tenantId, [contact.id]);
+  const fresh = await prisma.contact.findUnique({ where: { id: contact.id }, select: { optedOut: true } });
 
-  const list = await createAssembledList(tenantId, trimmedName);
-  await addContactsToListRepo(tenantId, list.id, contactIds);
+  let addedToList = false;
+  if (input.listId && !fresh?.optedOut) {
+    const list = await getListSummary(tenantId, input.listId);
+    if (!list) throw new NotFoundError("Lista não encontrada.");
+    if (list.type === "EXTRACTED" && list.connectionId !== connectionId) {
+      throw new ValidationError("Uma lista extraída só aceita contatos do próprio número.");
+    }
+    addedToList = (await addContactsToListRepo(tenantId, input.listId, [contact.id])) > 0;
+  }
 
-  return { listId: list.id, imported: contactIds.length, skipped };
+  return { contactId: contact.id, phone, optedOut: !!fresh?.optedOut, addedToList };
 }
 
 export async function renameContactList(tenantId: string, listId: string, name: string) {
@@ -316,4 +403,50 @@ export async function removeContactFromListById(tenantId: string, listId: string
  * repository directly. */
 export function getConnectionForCampaigns(tenantId: string, connectionId: string) {
   return getConnectionSummary(tenantId, connectionId);
+}
+
+export interface ListNamePreview {
+  /** Contatos ativos (sem opt-out) da lista. */
+  total: number;
+  /** Quantos têm nome, por origem ("sem_nome" = sem nome nenhum). */
+  bySource: Record<string, number>;
+  /** Até 3 contatos com nome (pra prévia da mensagem). */
+  samples: { name: string; phone: string; nameSource: string | null }[];
+  /** Contatos frios (captados do Google) ativos na lista — >0 = a campanha
+   * segue as regras de contato frio. */
+  coldCount: number;
+}
+
+/** Prévia de "de onde vem o {{nome}}" pra tela de criar campanha. */
+export async function getListNamePreview(tenantId: string, listId: string): Promise<ListNamePreview> {
+  const list = await getListSummary(tenantId, listId);
+  if (!list) throw new NotFoundError("Lista não encontrada.");
+  const where = { tenantId, optedOut: false, listMemberships: { some: { listId } } };
+  const [groups, samples] = await Promise.all([
+    prisma.contact.groupBy({ by: ["nameSource"], where: { ...where, name: { not: null } }, _count: { _all: true } }),
+    prisma.contact.findMany({
+      where: { ...where, name: { not: null } },
+      select: { name: true, phone: true, nameSource: true },
+      orderBy: { createdAt: "asc" },
+      take: 3,
+    }),
+  ]);
+  const [total, coldCount] = await Promise.all([
+    prisma.contact.count({ where }),
+    prisma.contact.count({ where: { ...where, isCold: true } }),
+  ]);
+  const bySource: Record<string, number> = {};
+  let named = 0;
+  for (const g of groups) {
+    const key = g.nameSource ?? "whatsapp";
+    bySource[key] = (bySource[key] ?? 0) + g._count._all;
+    named += g._count._all;
+  }
+  bySource.sem_nome = Math.max(0, total - named);
+  return {
+    total,
+    coldCount,
+    bySource,
+    samples: samples.filter((c): c is { name: string; phone: string; nameSource: string | null } => !!c.name),
+  };
 }

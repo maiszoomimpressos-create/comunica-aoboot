@@ -35,10 +35,25 @@ export const CAMPAIGN_DEFAULTS = {
   minBatchPauseSeconds: 15,
   maxBatchPauseSeconds: 20,
 
-  /** Limite diário de envios por conexão. `null` = sem limite — não
-   * existe um número "seguro" universal válido para qualquer conta ou
-   * provedor, então não assumimos um teto por padrão; é opt-in. */
-  dailyLimit: null as number | null,
+  /** Limite diário de envios por conexão. `null` = sem limite. Não existe
+   * número "seguro" universal, mas mandar sem teto nenhum é o jeito mais
+   * rápido de perder um número — novas conexões nascem com 200/dia e o
+   * tenant ajusta (ou limpa) no painel. */
+  dailyLimit: 200 as number | null,
+
+  /** Aquecimento de número novo ligado por padrão (ver warmupDailyCap em
+   * lib/campaigns/pacing.ts). */
+  warmupEnabled: true,
+
+  /** Checa phone-exists antes de cada envio. */
+  verifyNumbersBeforeSend: true,
+
+  /** Rodapé de descadastro em toda mensagem de campanha. */
+  optOutFooterEnabled: true,
+
+  /** Tentativas totais por destinatário — só erros temporários (rede,
+   * timeout, HTTP 429/5xx) são retentados. */
+  maxAttempts: 3,
 
   /** Falhas consecutivas que disparam a pausa automática de proteção da
    * fila (ver "pausa automática" no plano do módulo) — categoria
@@ -48,9 +63,34 @@ export const CAMPAIGN_DEFAULTS = {
   maxConsecutiveErrors: 5,
 } as const;
 
-/** Palavras-chave de opt-out — comparação exata (case-insensitive, com
- * trim), nunca interpretação aproximada/fuzzy. Uma mensagem que não bate
- * exatamente com nenhuma dessas não é tratada como opt-out — fica de fora
- * de qualquer ação automática, para revisão manual (ver seção "opt-out"
- * do plano do módulo). */
-export const OPT_OUT_KEYWORDS = ["SAIR", "PARAR", "CANCELAR", "NÃO QUERO", "NAO QUERO", "REMOVER"] as const;
+/** Palavras-chave de opt-out — comparação exata (sem diferenciar
+ * maiúsculas/acentos, ignorando pontuação e espaços nas pontas), nunca
+ * interpretação aproximada/fuzzy. Uma mensagem que não bate exatamente com
+ * nenhuma dessas não é tratada como opt-out.
+ *
+ * "CANCELAR" ficou DE FORA de propósito: o mesmo número atende passageiros
+ * do MAI Drive, e "cancelar" é a palavra natural pra cancelar uma corrida —
+ * tratá-la como descadastro engoliria esse pedido antes do bot/fluxo. Além
+ * disso, o opt-out automático só vale pra quem recebeu campanha desta
+ * conexão recentemente (ver OPT_OUT_CAMPAIGN_LOOKBACK_DAYS). */
+export const OPT_OUT_KEYWORDS = [
+  "SAIR",
+  "PARAR",
+  "NAO QUERO",
+  "REMOVER",
+  "DESCADASTRAR",
+  "DESCADASTRE",
+  "STOP",
+] as const;
+
+/** Só trata "SAIR"/... como opt-out se este telefone recebeu mensagem de
+ * campanha desta conexão nos últimos N dias — fora disso a mensagem segue
+ * normal pro atendimento (relay/fluxo/IA). */
+export const OPT_OUT_CAMPAIGN_LOOKBACK_DAYS = 30;
+
+/** Rodapé padrão (quando optOutFooterText está vazio). */
+export const DEFAULT_OPT_OUT_FOOTER = "Para não receber mais mensagens, responda SAIR.";
+
+/** Resposta automática pra quem pediu descadastro. */
+export const OPT_OUT_CONFIRMATION_MESSAGE =
+  "Pronto! Você não vai mais receber nossas mensagens promocionais. Se mudar de ideia, é só falar com a gente por aqui.";

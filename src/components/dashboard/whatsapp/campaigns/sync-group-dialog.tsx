@@ -72,7 +72,8 @@ export function SyncGroupDialog({ tenantSlug, connectionId }: { tenantSlug: stri
       return;
     }
     setResult(
-      `"${res.data.listName}" — ${res.data.total} participante(s), ${res.data.created} contato(s) novo(s).`
+      `"${res.data.listName}" — ${res.data.total} participante(s), ${res.data.created} contato(s) novo(s)` +
+        (res.data.skipped > 0 ? `, ${res.data.skipped} ignorado(s) (número oculto pelo WhatsApp — id @lid).` : ".")
     );
     router.refresh();
   }

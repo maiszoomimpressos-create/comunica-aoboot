@@ -2,22 +2,29 @@
 
 import { z } from "zod";
 import { defineTenantAction } from "@/lib/server/actions/define-tenant-action";
-import { importContactsFromCsv } from "@/services/whatsapp-contacts.service";
+import { CSV_IMPORT_CHUNK_SIZE, importCsvChunk } from "@/services/whatsapp-contacts.service";
 import { assertConnectionAccess } from "@/lib/rbac/connection-scope";
 
 const schema = z.object({
   connectionId: z.string().min(1),
+  /** null no primeiro pedaço (cria a lista); depois, o id devolvido. */
+  listId: z.string().min(1).nullable(),
   name: z.string().min(1, "Informe um nome para a lista."),
-  csvText: z.string().min(1, "Selecione um arquivo CSV."),
+  rows: z
+    .array(z.object({ phone: z.string().max(40), name: z.string().max(200).nullable() }))
+    .min(1, "O arquivo não tem nenhuma linha.")
+    .max(CSV_IMPORT_CHUNK_SIZE),
 });
 
-/** Tenant-facing: cria uma lista montada a partir de um CSV de telefones —
- * ver whatsapp-contacts.service.ts's importContactsFromCsv. */
+/** Tenant-facing: importa UM pedaço de um CSV de telefones (o navegador lê
+ * e parseia o arquivo e manda em pedaços de até CSV_IMPORT_CHUNK_SIZE
+ * linhas, então arquivos grandes não batem no limite de 1 MB da Server
+ * Action) — ver whatsapp-contacts.service.ts's importCsvChunk. */
 export const importCsvListAction = defineTenantAction(
   "campaigns.manage",
   async (ctx, input: z.infer<typeof schema>) => {
-    const { connectionId, name, csvText } = schema.parse(input);
+    const { connectionId, listId, name, rows } = schema.parse(input);
     assertConnectionAccess(ctx, connectionId);
-    return importContactsFromCsv(ctx.tenantId, connectionId, name, csvText);
+    return importCsvChunk(ctx.tenantId, connectionId, { listId, listName: name, rows });
   }
 );

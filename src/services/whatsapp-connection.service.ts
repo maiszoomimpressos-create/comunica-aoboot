@@ -57,6 +57,13 @@ import { getProviderByKey } from "@/repositories/channel-provider.repository";
 import { handleInboundMessage } from "./bot-attendant.service";
 import { tryClaimInboundMessage } from "@/repositories/bot.repository";
 import { tryHandleRelayMessage } from "@/services/relay-session.service";
+import { isRideReceiptNotificationType } from "@/config/ride-receipt-app-promo";
+import { scheduleRideReceiptFollowUp } from "@/services/ride-receipt-follow-up.service";
+import {
+  applyCampaignMessageStatus,
+  rememberInboundContactName,
+  tryHandleCampaignOptOut,
+} from "@/services/campaign-inbound.service";
 import { tryHandleFlowMessage } from "@/services/flow-engine.service";
 import { interceptAutomaticReply } from "@/services/anti-loop.service";
 import { interceptAckReplyAfterNotification, recordNotificationSent } from "@/services/ack-silence.service";
@@ -566,12 +573,33 @@ async function maybeHandleInboundBotMessage(connectionId: string, payload: unkno
   const text = isRecord(payload.text) ? payload.text.message : undefined;
   const bodyText = typeof text === "string" && text.trim() ? text : null;
 
+  // Nome do contato que a Z-API entrega no webhook (chatName) preenche
+  // contato de campanha sem nome — ver campaign-inbound.service.ts.
+  await rememberInboundContactName(connectionId, fromPhone, payload).catch(async (err) => {
+    await logBotEvent("warn", "remember_inbound_contact_name_failed", { connectionId, error: serializeError(err) });
+    return 0;
+  });
+
   // Repasse humano (ver relay-session.service.ts): intercepta ANTES do bot
   // de IA qualquer mensagem de quem já está dos dois lados de um handoff em
   // andamento (cliente escalado, ou atendente com algo pendente/ativo) —
   // `true` significa "já tratei, não deixa cair no bot". Entra depois do
   // dedup acima (mensagem redelivered não deve ser relayada duas vezes) e
   // antes dos branches texto/áudio normais de baixo.
+  // Opt-out de campanha ("SAIR", "PARAR"...): antes de tudo (relay, fluxo,
+  // IA) — quem pediu pra sair não pode cair numa resposta automática. Só
+  // intercepta quem recebeu campanha desta conexão nos últimos 30 dias (ver
+  // campaign-inbound.service.ts); qualquer erro aqui não derruba o bot.
+  if (bodyText) {
+    const optOutHandled = await tryHandleCampaignOptOut({ connectionId, fromPhone, text: bodyText }).catch(
+      async (err) => {
+        await logBotEvent("error", "campaign_opt_out_failed", { connectionId, error: serializeError(err) });
+        return false;
+      }
+    );
+    if (optOutHandled) return;
+  }
+
   const relayHandled = await tryHandleRelayMessage({
     connectionId,
     fromPhone,
@@ -661,6 +689,10 @@ export async function recordWebhookEvent(connectionId: string, payload: unknown)
   // Publicidades: o RECEIVED de um recibo libera a publicidade da fila
   // (30 s depois, em after()). Outros eventos: não faz nada. Nunca lança.
   onWebhookForAdvertisements(connectionId, payload);
+  // Entregue / lido dos envios de campanha (MessageStatusCallback).
+  await applyCampaignMessageStatus(connectionId, payload).catch((err) => {
+    void logBotEvent("error", "apply_campaign_message_status_failed", { connectionId, error: serializeError(err) });
+  });
   after(() =>
     maybeHandleInboundBotMessage(connectionId, payload).catch((err) => {
       void logBotEvent("error", "bot_pipeline_uncaught", { connectionId, error: serializeError(err) });
@@ -826,11 +858,37 @@ export async function sendPurchaseConfirmation(
     result,
   });
 
+  // Recibo de corrida entregue (corrida_concluida ou a função
+  // corrida_mai_drive) → agenda (3-5 min depois) a imagem com o link do app
+  // na Play Store, se a conexão tiver isso ligado (ver
+  // ride-receipt-follow-up.service.ts). Nunca derruba a resposta do recibo,
+  // que já foi enviado.
+  let rideAppPromoActive = false;
+  if (result.ok && isRideReceiptNotificationType(resolvedKey)) {
+    const followUp = await scheduleRideReceiptFollowUp({
+      connectionId: connection.id,
+      to: input.to,
+      details,
+      receiptRaw: result.raw,
+    }).catch(async (err) => {
+      await logBotEvent("error", "ride_follow_up_schedule_failed", {
+        connectionId: connection.id,
+        error: serializeError(err),
+      });
+      return null;
+    });
+    rideAppPromoActive = followUp?.active === true;
+  }
+
   // Publicidades: depois de um envio com sucesso, põe na fila (after()) no
   // máximo UMA publicidade ativa ligada a esta função. Ela só sai quando o
   // recibo chegar no aparelho (RECEIVED) + 30 s; sem RECEIVED em 30 min,
   // expira. Nunca lança e nunca atrasa esta resposta.
-  if (result.ok) {
+  // Exceção (pra o passageiro não receber duas divulgações): depois de um
+  // recibo de corrida numa conexão com a imagem do app (Play Store) ligada,
+  // a Publicidade NÃO é enfileirada — quem divulga ali é a imagem do app.
+  // Nas demais funções, e nas conexões sem a imagem ligada, nada muda.
+  if (result.ok && !rideAppPromoActive) {
     scheduleAdvertisementAfterNotification({
       connectionId: connection.id,
       tenantId: connection.tenantId,

@@ -1,9 +1,12 @@
+import { shouldReplaceContactName, type ContactNameSource } from "@/lib/whatsapp/contact-name";
 import { prisma } from "@/lib/db/prisma";
 
 export interface ContactRow {
   id: string;
   phone: string;
   name: string | null;
+  /** Ver lib/whatsapp/contact-name.ts. */
+  nameSource: string | null;
   source: string;
   optedOut: boolean;
   optedOutAt: Date | null;
@@ -21,6 +24,7 @@ const contactSelect = {
   id: true,
   phone: true,
   name: true,
+  nameSource: true,
   source: true,
   optedOut: true,
   optedOutAt: true,
@@ -93,18 +97,22 @@ export async function listContactsNotInListForTenant(tenantId: string, listId: s
 export interface SyncedContact {
   phone: string;
   name?: string;
+  /** Origem do nome (ver lib/whatsapp/contact-name.ts). Sem valor: deduz
+   * de `source` (import → csv, manual → manual, resto → whatsapp). */
+  nameSource?: ContactNameSource;
+}
+
+function defaultNameSource(source: string): ContactNameSource {
+  if (source === "import") return "csv";
+  if (source === "manual") return "manual";
+  return "whatsapp";
 }
 
 /**
- * Upserts the connection's synced address book: existing phones get their
- * name refreshed (never touches `optedOut` — a re-sync must never silently
- * undo an opt-out), new phones are inserted with the given `source`
- * (defaults to "sync"; CSV import passes "import" — see
- * importContactsFromCsv). Chunked (concurrency of 20) instead of one giant
- * sequential loop or a single `createMany`, since we need per-row upsert
- * semantics (insert-or-update) that `createMany` doesn't support — fine for
- * the address-book sizes this targets; a very large book (tens of
- * thousands) would need a bulk SQL upsert instead, not attempted here.
+ * Cria/atualiza contatos de uma conexão em lote (sync da agenda, grupo,
+ * CSV, cadastro manual). Nome: segue shouldReplaceContactName — nome de
+ * CSV/manual nunca é trocado pela Z-API, CSV só preenche quem está sem
+ * nome, agenda > perfil. Nunca mexe em opt-out.
  */
 export async function upsertSyncedContacts(
   tenantId: string,
@@ -115,50 +123,91 @@ export async function upsertSyncedContacts(
 ): Promise<{ created: number; updated: number }> {
   const existing = await prisma.contact.findMany({
     where: { tenantId, connectionId },
-    select: { id: true, phone: true, name: true, originPhoneNumber: true },
+    select: { id: true, phone: true, name: true, nameSource: true, originPhoneNumber: true },
   });
   const existingByPhone = new Map(existing.map((c) => [c.phone, c]));
 
-  let created = 0;
-  let updated = 0;
-  const concurrency = 20;
+  const toCreate: SyncedContact[] = [];
+  const seen = new Set<string>();
+  const toUpdate: {
+    id: string;
+    data: { name?: string; nameSource?: string; originPhoneNumber?: string };
+  }[] = [];
 
-  for (let i = 0; i < contacts.length; i += concurrency) {
-    const batch = contacts.slice(i, i + concurrency);
+  for (const contact of contacts) {
+    if (seen.has(contact.phone)) continue;
+    seen.add(contact.phone);
+    const incomingName = contact.name?.trim() || null;
+    const incoming = incomingName
+      ? { name: incomingName, source: contact.nameSource ?? defaultNameSource(source) }
+      : null;
+    const found = existingByPhone.get(contact.phone);
+    if (!found) {
+      toCreate.push({ phone: contact.phone, ...(incoming ? { name: incoming.name, nameSource: incoming.source } : {}) });
+      continue;
+    }
+    const nameChanged = !!incoming && shouldReplaceContactName(found, incoming);
+    // Só o sync da agenda re-carimba a origem — CSV/manual não "mudam" de
+    // qual número o contato foi extraído.
+    const originChanged = source === "sync" && found.originPhoneNumber !== originPhoneNumber;
+    if (nameChanged || originChanged) {
+      toUpdate.push({
+        id: found.id,
+        data: {
+          ...(nameChanged && incoming ? { name: incoming.name, nameSource: incoming.source } : {}),
+          ...(originChanged ? { originPhoneNumber } : {}),
+        },
+      });
+    }
+  }
+
+  let created = 0;
+  const chunkSize = 1000;
+  for (let i = 0; i < toCreate.length; i += chunkSize) {
+    const result = await prisma.contact.createMany({
+      data: toCreate.slice(i, i + chunkSize).map((c) => ({
+        tenantId,
+        connectionId,
+        phone: c.phone,
+        name: c.name,
+        nameSource: c.name ? (c.nameSource ?? defaultNameSource(source)) : null,
+        source,
+        originPhoneNumber,
+      })),
+      skipDuplicates: true,
+    });
+    created += result.count;
+  }
+
+  const concurrency = 20;
+  for (let i = 0; i < toUpdate.length; i += concurrency) {
     await Promise.all(
-      batch.map(async (contact) => {
-        const found = existingByPhone.get(contact.phone);
-        if (!found) {
-          await prisma.contact.create({
-            data: {
-              tenantId,
-              connectionId,
-              phone: contact.phone,
-              name: contact.name,
-              source,
-              originPhoneNumber,
-            },
-          });
-          created++;
-          return;
-        }
-        const nameChanged = !!contact.name && contact.name !== found.name;
-        const originChanged = found.originPhoneNumber !== originPhoneNumber;
-        if (nameChanged || originChanged) {
-          await prisma.contact.update({
-            where: { id: found.id },
-            data: {
-              ...(nameChanged ? { name: contact.name } : {}),
-              ...(originChanged ? { originPhoneNumber } : {}),
-            },
-          });
-          updated++;
-        }
-      })
+      toUpdate.slice(i, i + concurrency).map((u) => prisma.contact.update({ where: { id: u.id }, data: u.data }))
     );
   }
 
-  return { created, updated };
+  return { created, updated: toUpdate.length };
+}
+
+/** Preenche/melhora o nome de UM contato com um nome vindo da Z-API (no
+ * envio da campanha ou ao receber mensagem) — mesmas regras do sync: nunca
+ * troca nome de CSV/manual. `where` por id ou por conexão + telefones
+ * (variações com/sem 9º dígito). Devolve quantos contatos mudaram. */
+export async function applyZapiNameToContacts(
+  where: { contactId: string } | { connectionId: string; phones: string[] },
+  incoming: { name: string; source: ContactNameSource }
+): Promise<number> {
+  const rows = await prisma.contact.findMany({
+    where: "contactId" in where ? { id: where.contactId } : { connectionId: where.connectionId, phone: { in: where.phones } },
+    select: { id: true, name: true, nameSource: true },
+  });
+  const targets = rows.filter((row) => shouldReplaceContactName(row, incoming));
+  if (targets.length === 0) return 0;
+  const result = await prisma.contact.updateMany({
+    where: { id: { in: targets.map((t) => t.id) } },
+    data: { name: incoming.name, nameSource: incoming.source },
+  });
+  return result.count;
 }
 
 /** Resolve os ids de contatos desta conexão a partir de uma lista de
@@ -190,24 +239,5 @@ export function setContactOptOut(
     data: optedOut
       ? { optedOut: true, optedOutAt: new Date(), optedOutSource: source }
       : { optedOut: false, optedOutAt: null, optedOutSource: null },
-  });
-}
-
-// --- Webhook (inbound, sem sessão de tenant) --------------------------------
-
-/** Resolves a contact purely by (connectionId, phone) — used from the
- * webhook opt-out path, which has no tenantId to scope by (same pattern as
- * getConnectionForWebhook in channel-connection.repository.ts). */
-export function findContactByPhoneForWebhook(connectionId: string, phone: string) {
-  return prisma.contact.findUnique({
-    where: { connectionId_phone: { connectionId, phone } },
-    select: { id: true, optedOut: true },
-  });
-}
-
-export function optOutContactByIdForWebhook(contactId: string) {
-  return prisma.contact.update({
-    where: { id: contactId },
-    data: { optedOut: true, optedOutAt: new Date(), optedOutSource: "keyword" },
   });
 }

@@ -5,6 +5,7 @@ import type {
   LinkButtonAction,
   ListContactsResult,
   ListGroupsResult,
+  PhoneExistsResult,
   QrCodeResult,
   SendMessageOptions,
   SendLinkButtonsResult,
@@ -50,6 +51,19 @@ export interface WhatsappProvider {
     video: string,
     caption?: string
   ): Promise<SendMessageResult>;
+  /** Documento (PDF, planilha...) — `document` é uma URL pública;
+   * `fileName` é o nome mostrado no WhatsApp (a extensão define o tipo).
+   * Usado pelo módulo Campanhas. */
+  sendDocument(
+    config: WhatsappConnectionConfig,
+    to: string,
+    document: string,
+    fileName: string,
+    caption?: string
+  ): Promise<SendMessageResult>;
+  /** Verifica se o número tem WhatsApp antes de um envio em massa —
+   * nunca lança; `ok: false` quando não foi possível verificar. */
+  checkPhoneExists(config: WhatsappConnectionConfig, phone: string): Promise<PhoneExistsResult>;
   /** Same contract as `sendImage`/`sendVideo` — `audio` is a URL or a
    * `data:audio/...;base64,...` data URI. Used by the AI attendant to
    * reply with a voice note when the inbound message itself was voice

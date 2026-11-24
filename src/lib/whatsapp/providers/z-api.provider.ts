@@ -6,6 +6,7 @@ import type {
   LinkButtonAction,
   ListContactsResult,
   ListGroupsResult,
+  PhoneExistsResult,
   ProviderContact,
   ProviderGroup,
   QrCodeResult,
@@ -15,6 +16,9 @@ import type {
   TestConnectionResult,
   WhatsappConnectionConfig,
 } from "../types";
+import { pickZapiContactName } from "../contact-name";
+import { sanitizeWhatsappPhone } from "../phone-sanitize";
+import { extractProviderMessageId } from "../../campaigns/delivery-status";
 
 /** Z-API only accepts 1-15 for both delay fields — out-of-range values are
  * silently ignored by the API, so clamp here instead of trusting callers. */
@@ -52,28 +56,18 @@ function trimTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
-/** Z-API's "no name saved" fallback is the formatted phone number itself
- * (e.g. "+55 46 8821-2387") — shared by getContactName and listContacts so
- * both apply the exact same "is this actually a name?" rule. A real name
- * always has letters; anything shaped like only digits/spaces/+/-/() is
- * the fallback, not a name. */
-function isRealName(value: string): boolean {
-  const looksLikePhoneNumber = /^[+\d][\d\s\-()]*$/.test(value);
-  return !looksLikePhoneNumber;
+/** `{ name, nameSource }` pra espalhar num ProviderContact (ou nada). */
+function pickedFields(
+  row: Record<string, unknown>,
+  forcedSource?: "whatsapp"
+): { name?: string; nameSource?: "agenda" | "perfil" | "whatsapp" } {
+  const picked = pickZapiContactName(row);
+  if (!picked) return {};
+  return { name: picked.name, nameSource: forcedSource ?? (picked.source === "agenda" ? "agenda" : "perfil") };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-/** First trimmed, non-empty string among the candidates — used to pick a
- * contact's display name from Z-API's several name-ish fields, in order of
- * preference (see listContacts). */
-function firstNonEmpty(...candidates: unknown[]): string {
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
-  }
-  return "";
 }
 
 function buildHeaders(apiToken: string, extra?: Record<string, string>): HeadersInit {
@@ -242,11 +236,11 @@ export class ZApiProvider implements WhatsappProvider {
     // Same "name" > "short" > "notify" fallback chain as listContacts —
     // `name` alone is only filled when the instance saved this number in
     // its own device contacts, which is rare for a business number.
-    const row = data as { name?: unknown; short?: unknown; notify?: unknown };
-    const name = firstNonEmpty(row.name, row.short, row.notify);
-    if (!name || !isRealName(name)) return { ok: false };
+    // Agenda (name/short) > perfil (vname/notify) — ver contact-name.ts.
+    const picked = pickZapiContactName(data as Record<string, unknown>);
+    if (!picked) return { ok: false };
 
-    return { ok: true, name };
+    return { ok: true, name: picked.name, nameSource: picked.source === "agenda" ? "agenda" : "perfil" };
   }
 
   /** `GET .../contacts` — Z-API's documented bulk endpoint for every
@@ -266,6 +260,7 @@ export class ZApiProvider implements WhatsappProvider {
   async listContacts(config: WhatsappConnectionConfig): Promise<ListContactsResult> {
     const contacts: ProviderContact[] = [];
     const pageSize = 100;
+    let skipped = 0;
 
     for (let page = 1; ; page++) {
       const url = `${trimTrailingSlash(config.apiUrl)}/contacts?page=${page}&pageSize=${pageSize}`;
@@ -298,10 +293,14 @@ export class ZApiProvider implements WhatsappProvider {
       const rows = Array.isArray(data) ? data : [];
       for (const row of rows) {
         if (!isRecord(row)) continue;
-        const phone = typeof row.phone === "string" ? row.phone.trim() : "";
-        if (!phone) continue;
-        const rawName = firstNonEmpty(row.name, row.short, row.vname, row.notify);
-        contacts.push({ phone, ...(rawName && isRealName(rawName) ? { name: rawName } : {}) });
+        // Descarta "@lid"/grupos/lixo — ver sanitizeWhatsappPhone.
+        const phone = sanitizeWhatsappPhone(row.phone, row.lid);
+        if (!phone) {
+          if (row.phone) skipped++;
+          continue;
+        }
+        // Agenda (name/short) > perfil (vname/notify) — ver contact-name.ts.
+        contacts.push({ phone, ...pickedFields(row) });
       }
 
       if (rows.length < pageSize) break; // last page
@@ -329,10 +328,17 @@ export class ZApiProvider implements WhatsappProvider {
         for (const row of rows) {
           if (!isRecord(row)) continue;
           if (row.isGroup === true) continue;
-          const phone = typeof row.phone === "string" ? row.phone.trim() : "";
-          if (!phone || knownPhones.has(phone)) continue;
+          const phone = sanitizeWhatsappPhone(row.phone, row.lid);
+          if (!phone) {
+            if (row.phone) skipped++;
+            continue;
+          }
+          if (knownPhones.has(phone)) continue;
           knownPhones.add(phone);
-          contacts.push({ phone });
+          // /chats às vezes traz `name` (nome do chat no aparelho: agenda
+          // quando salvo, senão o perfil — não dá pra saber qual); quando
+          // vem, usa — antes esses contatos entravam sempre sem nome.
+          contacts.push({ phone, ...pickedFields(row, "whatsapp") });
         }
 
         if (rows.length < pageSize) break; // last page
@@ -341,7 +347,7 @@ export class ZApiProvider implements WhatsappProvider {
       // Falha ao buscar /chats não invalida o que já temos de /contacts.
     }
 
-    return { ok: true, contacts, message: `${contacts.length} contato(s) encontrado(s).` };
+    return { ok: true, contacts, skipped, message: `${contacts.length} contato(s) encontrado(s).` };
   }
 
   /** `GET .../groups` — Z-API's documented bulk endpoint for every group
@@ -434,15 +440,28 @@ export class ZApiProvider implements WhatsappProvider {
       ? ((data as { participants: unknown[] }).participants)
       : [];
 
+    // O WhatsApp tem escondido o número real de participantes de grupo
+    // (vem só um id "@lid") — esses não viram contato: não dá pra mandar
+    // mensagem pra um id opaco como se fosse telefone.
+    let skipped = 0;
     const participants = rows.flatMap((row) => {
       if (!isRecord(row)) return [];
-      const phone = typeof row.phone === "string" ? row.phone.trim() : "";
-      if (!phone) return [];
-      const rawName = firstNonEmpty(row.name, row.short);
-      return [{ phone, ...(rawName && isRealName(rawName) ? { name: rawName } : {}) }];
+      const phone = sanitizeWhatsappPhone(row.phone, row.lid);
+      if (!phone) {
+        skipped++;
+        return [];
+      }
+      return [{ phone, ...pickedFields(row) }];
     });
 
-    return { ok: true, participants, message: `${participants.length} participante(s) encontrado(s).`, raw: data };
+    const skippedNote = skipped > 0 ? ` (${skipped} sem número visível — id @lid — ignorado(s))` : "";
+    return {
+      ok: true,
+      participants,
+      skipped,
+      message: `${participants.length} participante(s) encontrado(s)${skippedNote}.`,
+      raw: data,
+    };
   }
 
   /** `GET .../device` — the actual phone paired to the session right now
@@ -515,6 +534,51 @@ export class ZApiProvider implements WhatsappProvider {
       video,
       ...(caption ? { caption } : {}),
     });
+  }
+
+  /** `send-document/{extensão}` — `{ phone, document, fileName, caption }`
+   * (developer.z-api.io/en/message/send-message-document). **Não
+   * confirmado contra uma instância real ainda** — usado só por Campanhas. */
+  async sendDocument(
+    config: WhatsappConnectionConfig,
+    to: string,
+    document: string,
+    fileName: string,
+    caption?: string
+  ): Promise<SendMessageResult> {
+    const extension = (fileName.split(".").pop() || "pdf").toLowerCase().replace(/[^a-z0-9]/g, "") || "pdf";
+    return this.postJson(config, `send-document/${extension}`, {
+      phone: to,
+      document,
+      fileName,
+      ...(caption ? { caption } : {}),
+    });
+  }
+
+  /** `GET .../phone-exists/{phone}` → `{ exists, phone, lid }`
+   * (developer.z-api.io/en/contacts/get-iswhatsapp). **Não confirmado
+   * contra uma instância real ainda.** Nunca lança: falha de rede/HTTP volta
+   * como `ok: false` e o dispatcher segue com o envio sem a checagem. */
+  async checkPhoneExists(config: WhatsappConnectionConfig, phone: string): Promise<PhoneExistsResult> {
+    const url = `${trimTrailingSlash(config.apiUrl)}/phone-exists/${encodeURIComponent(phone)}`;
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(url, { method: "GET", headers: buildHeaders(config.apiToken) });
+    } catch {
+      return { ok: false, message: "Falha de comunicação ao verificar o número." };
+    }
+    const data = await response.json().catch(() => null);
+    if (!response.ok || !isRecord(data) || typeof data.exists !== "boolean") {
+      return { ok: false, message: `Não foi possível verificar o número (HTTP ${response.status}).`, raw: data };
+    }
+    const returnedPhone = sanitizeWhatsappPhone(data.phone);
+    return {
+      ok: true,
+      exists: data.exists,
+      ...(returnedPhone ? { phone: returnedPhone } : {}),
+      message: data.exists ? "Número tem WhatsApp." : "Número não tem WhatsApp.",
+      raw: data,
+    };
   }
 
   /** `send-audio` — sibling endpoint of `send-image`/`send-video`, same
@@ -610,7 +674,7 @@ export class ZApiProvider implements WhatsappProvider {
     } catch (error) {
       const timedOut = error instanceof Error && error.name === "AbortError";
       return {
-        result: { ok: false, message: "Falha de comunicação com a instância." },
+        result: { ok: false, message: "Falha de comunicação com a instância.", networkError: true },
         failure: timedOut ? "timeout" : "network",
       };
     }
@@ -623,11 +687,22 @@ export class ZApiProvider implements WhatsappProvider {
           message:
             (data as { error?: string } | null)?.error ?? `Erro ao enviar (HTTP ${response.status}).`,
           raw: data,
+          httpStatus: response.status,
         },
         failure: "http",
       };
     }
 
-    return { result: { ok: true, message: "Mensagem enviada com sucesso.", raw: data }, failure: null };
+    const messageId = extractProviderMessageId(data);
+    return {
+      result: {
+        ok: true,
+        message: "Mensagem enviada com sucesso.",
+        raw: data,
+        httpStatus: response.status,
+        ...(messageId ? { messageId } : {}),
+      },
+      failure: null,
+    };
   }
 }

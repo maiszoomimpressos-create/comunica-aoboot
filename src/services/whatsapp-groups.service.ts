@@ -9,6 +9,7 @@ import {
   getListSummary,
 } from "@/repositories/contact-list.repository";
 import { ConflictError, NotFoundError } from "@/lib/server/errors";
+import { applyTenantOptOutsToContacts } from "@/repositories/tenant-opt-out.repository";
 import {
   requireConnectedConnection,
   syncContactsFromConnection,
@@ -41,6 +42,9 @@ export interface SyncGroupContactsResult {
   updated: number;
   listId: string;
   listName: string;
+  /** Participantes ignorados: WhatsApp só mandou o id "@lid" (número
+   * oculto) ou algo que não é telefone. */
+  skipped: number;
 }
 
 /** Pulls a specific group's participant list and upserts them as `Contact`
@@ -76,8 +80,9 @@ export async function syncContactsFromGroup(
     tenantId,
     connectionId,
     connection.phoneNumber,
-    result.participants.map((p) => ({ phone: p.phone, name: p.name }))
+    result.participants.map((p) => ({ phone: p.phone, name: p.name, nameSource: p.nameSource }))
   );
+  await applyTenantOptOutsToContacts(tenantId);
 
   const [groupList, connectionList] = await Promise.all([
     getOrCreateExtractedListForGroup(
@@ -117,6 +122,7 @@ export async function syncContactsFromGroup(
     updated,
     listId: groupList.id,
     listName: groupList.name,
+    skipped: result.skipped ?? 0,
   };
 }
 
@@ -145,7 +151,7 @@ export async function syncExtractedList(tenantId: string, listId: string): Promi
 
   if (list.sourceGroupId) {
     const result = await syncContactsFromGroup(tenantId, list.connectionId, list.sourceGroupId, list.name);
-    return { total: result.total, created: result.created, updated: result.updated };
+    return { total: result.total, created: result.created, updated: result.updated, skipped: result.skipped };
   }
 
   return syncContactsFromConnection(tenantId, list.connectionId);

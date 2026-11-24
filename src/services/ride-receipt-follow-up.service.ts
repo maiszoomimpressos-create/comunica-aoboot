@@ -1,0 +1,285 @@
+import { createHash } from "node:crypto";
+import { put } from "@vercel/blob";
+import { decryptSecret } from "@/lib/crypto/secret-box";
+import { getWhatsappProvider } from "@/lib/whatsapp/registry";
+import { logBotEvent, serializeError } from "@/lib/logging/bot-attendant-logger";
+import { NotFoundError, ValidationError } from "@/lib/server/errors";
+import { getConnectionSummary } from "@/repositories/channel-connection.repository";
+import {
+  getAppPromoSettings,
+  upsertAppPromoSettings,
+} from "@/repositories/app-promo-settings.repository";
+import {
+  claimDueRideReceiptFollowUps,
+  createRideReceiptFollowUpIfAbsent,
+  markRideReceiptFollowUpCancelled,
+  markRideReceiptFollowUpFailed,
+  markRideReceiptFollowUpSent,
+  recoverStuckRideReceiptFollowUps,
+  rescheduleRideReceiptFollowUp,
+  type ClaimedRideReceiptFollowUp,
+} from "@/repositories/ride-receipt-follow-up.repository";
+import {
+  APP_PROMO_CAPTION_MAX_LENGTH,
+  randomAppPromoDelayMs,
+  renderAppPromoCaption,
+} from "@/config/ride-receipt-app-promo";
+
+/** Teto de envios por tick — com o pinger batendo ~1x/min, só alguns ficam
+ * vencidos por vez; isso limita o pior caso (backlog depois de downtime). */
+const CLAIM_LIMIT_PER_TICK = 50;
+/** PROCESSING há mais que isso = processo caiu no meio; volta pra PENDING. */
+const STUCK_THRESHOLD_MS = 10 * 60 * 1000;
+/** Tentativas totais (a primeira + retentativas) antes de virar FAILED. */
+const MAX_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 2 * 60 * 1000;
+/** Se o cron ficou parado e a imagem venceu há mais que isso, ela não é
+ * mais enviada — chegar horas depois da corrida não faz sentido. */
+const EXPIRE_AFTER_MS = 60 * 60 * 1000;
+
+const MAX_UPLOAD_BYTES = 1_000_000;
+const ALLOWED_IMAGE_TYPES: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+
+// ---------------------------------------------------------------------
+// Agendamento (chamado por sendPurchaseConfirmation)
+// ---------------------------------------------------------------------
+
+function stableStringify(value: Record<string, string>): string {
+  return JSON.stringify(Object.keys(value).sort().map((k) => [k, value[k]]));
+}
+
+function extractProviderMessageId(raw: unknown): string | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  for (const key of ["messageId", "zaapId", "id"]) {
+    if (typeof r[key] === "string" && r[key]) return r[key] as string;
+  }
+  return null;
+}
+
+export interface ScheduleRideReceiptFollowUpInput {
+  connectionId: string;
+  to: string;
+  details: Record<string, string>;
+  /** `SendMessageResult.raw` do recibo — só pra guardar o messageId. */
+  receiptRaw?: unknown;
+}
+
+/**
+ * Chamado logo depois que um recibo de corrida (`corrida_concluida` ou a
+ * função `corrida_mai_drive`, ver isRideReceiptNotificationType) saiu com sucesso.
+ * Só agenda se a conexão tiver a imagem pós-corrida ligada e completa
+ * (imagem + link); caso contrário não faz nada. O envio de verdade acontece
+ * no cron (dispatchDueRideReceiptFollowUps), entre 3 e 5 minutos depois.
+ * Idempotente por recibo: o mesmo recibo reenviado pelo MAI Drive (mesma
+ * conexão + telefone + dados) não agenda a imagem de novo.
+ *
+ * `active` diz se a imagem pós-corrida está ligada e completa nesta conexão
+ * (mesmo quando não agendou por ser recibo repetido) — sendPurchaseConfirmation
+ * usa isso pra NÃO enfileirar também uma Publicidade depois do mesmo recibo.
+ */
+export async function scheduleRideReceiptFollowUp(
+  input: ScheduleRideReceiptFollowUpInput
+): Promise<{ active: boolean; scheduled: boolean; scheduledAt?: Date }> {
+  const settings = await getAppPromoSettings(input.connectionId);
+  if (!settings?.enabled || !settings.imageUrl || !settings.playStoreUrl) return { active: false, scheduled: false };
+
+  const idempotencyKey = createHash("sha256")
+    .update(`${input.connectionId}|${input.to}|${stableStringify(input.details)}`)
+    .digest("hex");
+  const scheduledAt = new Date(Date.now() + randomAppPromoDelayMs());
+
+  const created = await createRideReceiptFollowUpIfAbsent({
+    connectionId: input.connectionId,
+    toPhone: input.to,
+    idempotencyKey,
+    scheduledAt,
+    receiptMessageId: extractProviderMessageId(input.receiptRaw),
+  });
+  return created ? { active: true, scheduled: true, scheduledAt } : { active: true, scheduled: false };
+}
+
+// ---------------------------------------------------------------------
+// Envio (cron)
+// ---------------------------------------------------------------------
+
+export interface RideFollowUpDispatchSummary {
+  claimed: number;
+  sent: number;
+  retried: number;
+  failed: number;
+  cancelled: number;
+}
+
+/**
+ * Tick do cron — chamado por /api/cron/ride-follow-ups e também a cada hit
+ * de /api/cron/campaign-dispatcher (o pinger externo que já roda ~1x/min).
+ * Stateless e idempotente: tudo que importa está em RideReceiptFollowUp,
+ * então chamar duas vezes seguidas ou perder um tick é sempre seguro.
+ */
+export async function dispatchDueRideReceiptFollowUps(): Promise<RideFollowUpDispatchSummary> {
+  const now = new Date();
+  await recoverStuckRideReceiptFollowUps(new Date(now.getTime() - STUCK_THRESHOLD_MS));
+
+  const claimed = await claimDueRideReceiptFollowUps(now, CLAIM_LIMIT_PER_TICK);
+  const summary: RideFollowUpDispatchSummary = { claimed: claimed.length, sent: 0, retried: 0, failed: 0, cancelled: 0 };
+
+  for (const item of claimed) {
+    try {
+      await processFollowUp(item, now, summary);
+    } catch (err) {
+      await logBotEvent("error", "ride_follow_up_uncaught", { followUpId: item.id, error: serializeError(err) });
+      await retryOrFail(item, now, "Erro inesperado ao processar o envio.", summary).catch(() => undefined);
+    }
+  }
+
+  return summary;
+}
+
+async function retryOrFail(
+  item: ClaimedRideReceiptFollowUp,
+  now: Date,
+  error: string,
+  summary: RideFollowUpDispatchSummary
+) {
+  if (item.attempts >= MAX_ATTEMPTS) {
+    await markRideReceiptFollowUpFailed(item.id, error);
+    summary.failed++;
+  } else {
+    await rescheduleRideReceiptFollowUp(item.id, new Date(now.getTime() + RETRY_DELAY_MS), error);
+    summary.retried++;
+  }
+}
+
+async function processFollowUp(item: ClaimedRideReceiptFollowUp, now: Date, summary: RideFollowUpDispatchSummary) {
+  const { connection } = item;
+  const settings = connection.appPromoSettings;
+
+  if (!settings?.enabled || !settings.imageUrl || !settings.playStoreUrl) {
+    await markRideReceiptFollowUpCancelled(item.id, "Imagem pós-corrida desligada ou incompleta na hora do envio.");
+    summary.cancelled++;
+    return;
+  }
+  if (now.getTime() - item.scheduledAt.getTime() > EXPIRE_AFTER_MS) {
+    await markRideReceiptFollowUpCancelled(item.id, "Expirado: o cron não rodou a tempo (mais de 1h de atraso).");
+    summary.cancelled++;
+    return;
+  }
+  if (connection.status !== "CONNECTED" || !connection.apiUrl || !connection.apiTokenCipher) {
+    await retryOrFail(item, now, "Conexão não está ativa/configurada no momento.", summary);
+    return;
+  }
+
+  const businessName =
+    connection.businessName || connection.organization.messageBusinessName || connection.organization.name;
+  const caption = renderAppPromoCaption(settings.caption, { link: settings.playStoreUrl, businessName });
+
+  const provider = getWhatsappProvider(connection.provider.key);
+  const config = {
+    apiUrl: connection.apiUrl,
+    apiToken: decryptSecret(connection.apiTokenCipher),
+    phoneNumber: connection.phoneNumber,
+  };
+
+  const result = await provider.sendImage(config, item.toPhone, settings.imageUrl, caption);
+  if (result.ok) {
+    await markRideReceiptFollowUpSent(item.id, new Date());
+    summary.sent++;
+    return;
+  }
+
+  await logBotEvent("warn", "ride_follow_up_send_failed", {
+    followUpId: item.id,
+    connectionId: connection.id,
+    attempts: item.attempts,
+    message: result.message,
+  });
+  await retryOrFail(item, now, result.message, summary);
+}
+
+// ---------------------------------------------------------------------
+// Configuração no painel (modulos/whatsapp/funcoes)
+// ---------------------------------------------------------------------
+
+function normalizeHttpsUrl(value: string | null | undefined, fieldLabel: string): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new ValidationError(`${fieldLabel}: URL inválida.`);
+  }
+  if (url.protocol !== "https:") throw new ValidationError(`${fieldLabel}: use um endereço https://.`);
+  return url.toString();
+}
+
+async function assertConnectionOfTenant(tenantId: string, connectionId: string) {
+  const summary = await getConnectionSummary(tenantId, connectionId);
+  if (!summary) throw new NotFoundError("Conexão não encontrada.");
+}
+
+export interface UpdateAppPromoSettingsInput {
+  enabled: boolean;
+  imageUrl?: string | null;
+  playStoreUrl?: string | null;
+  caption?: string | null;
+}
+
+export async function updateAppPromoSettingsForConnection(
+  tenantId: string,
+  connectionId: string,
+  input: UpdateAppPromoSettingsInput
+) {
+  await assertConnectionOfTenant(tenantId, connectionId);
+
+  const imageUrl = normalizeHttpsUrl(input.imageUrl, "Imagem");
+  const playStoreUrl = normalizeHttpsUrl(input.playStoreUrl, "Link da Play Store");
+  const caption = input.caption?.trim() || null;
+  if (caption && caption.length > APP_PROMO_CAPTION_MAX_LENGTH) {
+    throw new ValidationError(`A legenda pode ter no máximo ${APP_PROMO_CAPTION_MAX_LENGTH} caracteres.`);
+  }
+  if (input.enabled && (!imageUrl || !playStoreUrl)) {
+    throw new ValidationError("Pra ligar o envio, informe a imagem e o link da Play Store.");
+  }
+
+  const saved = await upsertAppPromoSettings(connectionId, {
+    enabled: input.enabled,
+    imageUrl,
+    playStoreUrl,
+    caption,
+  });
+  return {
+    enabled: saved.enabled,
+    imageUrl: saved.imageUrl,
+    playStoreUrl: saved.playStoreUrl,
+    caption: saved.caption,
+  };
+}
+
+/** Sobe a imagem pro Vercel Blob (mesmo padrão do PDF de formulário em
+ * form-submission.service.ts) e devolve a URL pública. Não salva a config —
+ * o painel preenche o campo e o tenant clica em Salvar. */
+export async function uploadAppPromoImage(tenantId: string, connectionId: string, file: File): Promise<string> {
+  await assertConnectionOfTenant(tenantId, connectionId);
+
+  const ext = ALLOWED_IMAGE_TYPES[file.type];
+  if (!ext) throw new ValidationError("Formato não suportado — use JPG, PNG ou WEBP.");
+  if (file.size > MAX_UPLOAD_BYTES) throw new ValidationError("Imagem muito grande (máximo 1 MB).");
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    throw new ValidationError(
+      "Upload de imagem indisponível neste ambiente (BLOB_READ_WRITE_TOKEN não configurado) — cole a URL pública da imagem."
+    );
+  }
+
+  const blob = await put(`app-promo/${connectionId}/imagem.${ext}`, file, {
+    access: "public",
+    contentType: file.type,
+    addRandomSuffix: true,
+  });
+  return blob.url;
+}

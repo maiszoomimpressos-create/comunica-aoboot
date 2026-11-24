@@ -20,7 +20,13 @@ import { ImportCsvListDialog } from "@/components/dashboard/whatsapp/campaigns/i
 import { CreateCampaignDialog } from "@/components/dashboard/whatsapp/campaigns/create-campaign-dialog";
 import { CampaignCard } from "@/components/dashboard/whatsapp/campaigns/campaign-card";
 import { CampaignSettingsDialog } from "@/components/dashboard/whatsapp/campaigns/campaign-settings-dialog";
+import { CreateContactDialog } from "@/components/dashboard/whatsapp/campaigns/create-contact-dialog";
+import { CampaignLiveRefresh } from "@/components/dashboard/whatsapp/campaigns/campaign-live-refresh";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { DEFAULT_OPT_OUT_FOOTER } from "@/config/whatsapp-campaign-defaults";
+import { GoogleCaptureDialog } from "@/components/dashboard/whatsapp/campaigns/google-capture-dialog";
+import { isGooglePlacesConfigured } from "@/services/google-places.service";
+import { resolveOptOutFooter } from "@/lib/campaigns/cold-outreach";
 
 export const metadata: Metadata = { title: "Campanhas" };
 
@@ -77,6 +83,15 @@ export default async function CampaignsConnectionPage({
     getConnectionCampaignSettings(ctx.tenantId, connectionId),
   ]);
 
+  const businessName = connection.businessName || connection.connectionName;
+  const optOutFooter = campaignSettings.optOutFooterEnabled
+    ? campaignSettings.optOutFooterText?.trim() || DEFAULT_OPT_OUT_FOOTER
+    : null;
+  // Campanha com contato frio: rodapé de SAIR sempre (mesmo desligado).
+  const coldOptOutFooter = resolveOptOutFooter(campaignSettings, true);
+  const googleCaptureEnabled = isGooglePlacesConfigured();
+  const hasLiveCampaign = campaigns.some((c) => c.status === "RUNNING" || c.status === "SCHEDULED");
+
   const extractedLists = tenantLists.filter((l) => l.type === "EXTRACTED");
   const assembledLists = tenantLists.filter((l) => l.type === "ASSEMBLED");
 
@@ -120,6 +135,7 @@ export default async function CampaignsConnectionPage({
             </p>
             {canManage && (
               <div className="flex gap-2">
+                <CreateContactDialog tenantSlug={tenantSlug} connectionId={connectionId} lists={tenantLists} />
                 <SyncGroupDialog tenantSlug={tenantSlug} connectionId={connectionId} />
                 <SyncContactsButton tenantSlug={tenantSlug} connectionId={connectionId} />
               </div>
@@ -180,6 +196,11 @@ export default async function CampaignsConnectionPage({
                 </p>
                 {canManage && (
                   <div className="flex gap-2">
+                    <GoogleCaptureDialog
+                      tenantSlug={tenantSlug}
+                      connectionId={connectionId}
+                      enabled={googleCaptureEnabled}
+                    />
                     <ImportCsvListDialog tenantSlug={tenantSlug} connectionId={connectionId} />
                     <CreateAssembledListDialog tenantSlug={tenantSlug} />
                   </div>
@@ -199,11 +220,24 @@ export default async function CampaignsConnectionPage({
         </TabsContent>
 
         <TabsContent value="campanhas" className="space-y-4 pt-2">
+          <CampaignLiveRefresh active={hasLiveCampaign} />
+          {!campaignSettings.campaignsEnabled && (
+            <p className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">
+              Campanhas estão desligadas neste número (Configurações de disparo) — nada será enviado.
+            </p>
+          )}
           <div className="flex items-center justify-end gap-2">
             {canManage && (
               <>
                 <CampaignSettingsDialog tenantSlug={tenantSlug} connectionId={connectionId} settings={campaignSettings} />
-                <CreateCampaignDialog tenantSlug={tenantSlug} connectionId={connectionId} lists={tenantLists} />
+                <CreateCampaignDialog
+                  tenantSlug={tenantSlug}
+                  connectionId={connectionId}
+                  lists={tenantLists}
+                  businessName={businessName}
+                  optOutFooter={optOutFooter}
+                  coldOptOutFooter={coldOptOutFooter ?? DEFAULT_OPT_OUT_FOOTER}
+                />
               </>
             )}
           </div>

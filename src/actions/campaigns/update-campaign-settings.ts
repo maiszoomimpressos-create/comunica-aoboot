@@ -16,6 +16,15 @@ const schema = z.object({
   maxBatchPauseSeconds: z.number().int(),
   dailyLimit: z.number().int().nullable(),
   maxConsecutiveErrors: z.number().int(),
+  campaignsEnabled: z.boolean(),
+  warmupEnabled: z.boolean(),
+  verifyNumbersBeforeSend: z.boolean(),
+  optOutFooterEnabled: z.boolean(),
+  optOutFooterText: z.string().max(200).nullable(),
+  maxAttempts: z.number().int(),
+  coldDailyLimit: z.number().int(),
+  coldMinMessageIntervalSeconds: z.number().int(),
+  coldMaxMessageIntervalSeconds: z.number().int(),
 });
 
 export const updateCampaignSettingsAction = defineTenantAction(

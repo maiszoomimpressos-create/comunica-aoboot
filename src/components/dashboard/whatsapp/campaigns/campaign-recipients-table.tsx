@@ -1,28 +1,41 @@
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import type { CampaignRecipientRow } from "@/repositories/campaign.repository";
+import { RECIPIENT_STATUS_LABEL, RECIPIENT_STATUS_VARIANT, formatSpDateTime } from "./campaign-status";
 
-const STATUS_LABEL: Record<CampaignRecipientRow["status"], string> = {
-  PENDING: "Pendente",
-  PROCESSING: "Processando",
-  SENT: "Enviada",
-  DELIVERED: "Entregue",
-  FAILED: "Falhou",
-  CANCELLED: "Cancelada",
-  OPTED_OUT: "Opt-out",
-};
+function whenLabel(r: CampaignRecipientRow): string {
+  if (r.readAt) return `Lida ${formatSpDateTime(r.readAt)}`;
+  if (r.deliveredAt) return `Entregue ${formatSpDateTime(r.deliveredAt)}`;
+  if (r.sentAt) return `Enviada ${formatSpDateTime(r.sentAt)}`;
+  if (r.failedAt) return formatSpDateTime(r.failedAt);
+  if (r.scheduledAt && (r.status === "PENDING" || r.status === "PROCESSING")) {
+    return `Previsto ${formatSpDateTime(r.scheduledAt)}`;
+  }
+  return "—";
+}
 
-const STATUS_VARIANT: Record<CampaignRecipientRow["status"], "default" | "secondary" | "outline" | "destructive"> = {
-  PENDING: "outline",
-  PROCESSING: "outline",
-  SENT: "default",
-  DELIVERED: "default",
-  FAILED: "destructive",
-  CANCELLED: "secondary",
-  OPTED_OUT: "secondary",
-};
+function detailLabel(r: CampaignRecipientRow): string {
+  if (r.status === "FAILED" || r.status === "INVALID_NUMBER") return r.errorMessage ?? "Falha não especificada.";
+  if (r.status === "PENDING" && r.errorMessage) return r.errorMessage; // aguardando nova tentativa
+  return r.attempts > 1 ? `${r.attempts} tentativas` : "—";
+}
 
-export function CampaignRecipientsTable({ recipients }: { recipients: CampaignRecipientRow[] }) {
+/** Progresso na sequência ("2/3 mensagens") — só quando há mais de uma
+ * parte e o envio está no meio (ou parou no meio). */
+function progressLabel(r: CampaignRecipientRow, totalParts: number): string | null {
+  if (totalParts <= 1 || r.nextPartIndex <= 0) return null;
+  if (r.status === "SENT" || r.status === "DELIVERED" || r.status === "READ") return null;
+  return `${Math.min(r.nextPartIndex, totalParts)}/${totalParts} mensagens já enviadas`;
+}
+
+export function CampaignRecipientsTable({
+  recipients,
+  totalParts = 1,
+}: {
+  recipients: CampaignRecipientRow[];
+  /** Nº de mensagens da sequência da campanha. */
+  totalParts?: number;
+}) {
   if (recipients.length === 0) {
     return <p className="text-sm text-muted-foreground">Nenhum destinatário.</p>;
   }
@@ -33,7 +46,7 @@ export function CampaignRecipientsTable({ recipients }: { recipients: CampaignRe
         <TableRow>
           <TableHead>Contato</TableHead>
           <TableHead>Status</TableHead>
-          <TableHead>Agendado para</TableHead>
+          <TableHead>Quando (Brasília)</TableHead>
           <TableHead>Detalhe</TableHead>
         </TableRow>
       </TableHeader>
@@ -45,13 +58,12 @@ export function CampaignRecipientsTable({ recipients }: { recipients: CampaignRe
               {r.name && <p className="text-xs text-muted-foreground">{r.phone}</p>}
             </TableCell>
             <TableCell>
-              <Badge variant={STATUS_VARIANT[r.status]}>{STATUS_LABEL[r.status]}</Badge>
+              <Badge variant={RECIPIENT_STATUS_VARIANT[r.status]}>{RECIPIENT_STATUS_LABEL[r.status]}</Badge>
             </TableCell>
-            <TableCell className="text-sm text-muted-foreground">
-              {r.scheduledAt ? new Date(r.scheduledAt).toLocaleString("pt-BR") : "—"}
-            </TableCell>
-            <TableCell className="text-sm text-muted-foreground">
-              {r.status === "FAILED" ? (r.errorMessage ?? "Falha não especificada.") : r.attempts > 0 ? `${r.attempts} tentativa(s)` : "—"}
+            <TableCell className="text-sm text-muted-foreground">{whenLabel(r)}</TableCell>
+            <TableCell className="max-w-xs whitespace-normal text-sm text-muted-foreground">
+              {detailLabel(r)}
+              {progressLabel(r, totalParts) && <p className="text-xs">{progressLabel(r, totalParts)}</p>}
             </TableCell>
           </TableRow>
         ))}

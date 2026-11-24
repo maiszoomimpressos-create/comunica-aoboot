@@ -164,6 +164,8 @@ export interface ListMemberRow {
   // extraída (onde é sempre o mesmo número em toda a lista), porque numa
   // lista montada os membros podem vir de números diferentes.
   originPhoneNumber: string;
+  /** Contato frio (captado do Google). */
+  isCold: boolean;
 }
 
 export async function listMembersOfList(tenantId: string, listId: string): Promise<ListMemberRow[]> {
@@ -172,11 +174,12 @@ export async function listMembersOfList(tenantId: string, listId: string): Promi
     orderBy: { addedAt: "desc" },
     include: {
       contact: {
-        select: { phone: true, name: true, optedOut: true, originPhoneNumber: true },
+        select: { phone: true, name: true, optedOut: true, originPhoneNumber: true, isCold: true },
       },
     },
   });
   return members.map((m) => ({
+    isCold: m.contact.isCold,
     contactId: m.contactId,
     phone: m.contact.phone,
     name: m.contact.name,

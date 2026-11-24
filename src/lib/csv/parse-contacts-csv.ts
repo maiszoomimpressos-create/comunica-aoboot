@@ -66,11 +66,24 @@ function looksLikePhone(value: string): boolean {
  * faltar — mesma regra já usada pro fromPhone do Z-API (ver phone-format.ts). */
 function toE164Br(raw: string): string {
   const digits = raw.replace(/\D/g, "");
-  if (digits.startsWith("55")) return normalizeBrazilianMobile(digits);
   if (digits.length === 10 || digits.length === 11) {
     return normalizeBrazilianMobile(`55${digits}`);
   }
+  if (digits.startsWith("55")) return normalizeBrazilianMobile(digits);
   return digits;
+}
+
+/** Telefone de CSV/cadastro manual → E.164 só com dígitos, ou null se não
+ * parece telefone (menos de 10 ou mais de 15 dígitos, "@lid", letras...).
+ * Usado no navegador (prévia) e de novo no servidor (nunca confia no
+ * cliente). */
+export function normalizeCsvPhone(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed || /@|[a-z]/i.test(trimmed)) return null;
+  if (!looksLikePhone(trimmed)) return null;
+  const phone = toE164Br(trimmed);
+  if (phone.length < 10 || phone.length > 15) return null;
+  return phone;
 }
 
 /**
@@ -116,15 +129,12 @@ export function parseContactsCsv(csvText: string): ParseContactsCsvResult {
   for (let i = startRow; i < rows.length; i++) {
     const row = rows[i];
     const rawPhone = row[phoneIndex] ?? "";
-    if (!looksLikePhone(rawPhone)) {
+    const phone = normalizeCsvPhone(rawPhone);
+    if (!phone) {
       skipped++;
       continue;
     }
-    const phone = toE164Br(rawPhone);
-    if (phone.length < 10 || seen.has(phone)) {
-      if (!seen.has(phone)) skipped++;
-      continue;
-    }
+    if (seen.has(phone)) continue;
     seen.add(phone);
     const name = nameIndex !== null ? row[nameIndex]?.trim() || null : null;
     contacts.push({ phone, name });

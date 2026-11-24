@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { setContactOptOutAction } from "@/actions/campaigns/set-contact-opt-out";
 import type { ContactRow } from "@/repositories/contact.repository";
+import { CONTACT_NAME_SOURCE_LABEL, isContactNameSource } from "@/lib/whatsapp/contact-name";
 
 export function ContactsTable({
   tenantSlug,
@@ -53,7 +54,14 @@ export function ContactsTable({
         <TableBody>
           {contacts.map((contact) => (
             <TableRow key={contact.id}>
-              <TableCell>{contact.name ?? <span className="text-muted-foreground">—</span>}</TableCell>
+              <TableCell>
+                {contact.name ?? <span className="text-muted-foreground">—</span>}
+                {contact.name && isContactNameSource(contact.nameSource) && (
+                  <p className="text-xs text-muted-foreground">
+                    via {CONTACT_NAME_SOURCE_LABEL[contact.nameSource]}
+                  </p>
+                )}
+              </TableCell>
               <TableCell>{contact.phone}</TableCell>
               <TableCell>
                 {contact.optedOut ? (
