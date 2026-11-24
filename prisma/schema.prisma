@@ -1688,7 +1688,7 @@ model AppPromoSettings {
   linkDescription String?
   linkImageUrl    String?
   // Link curto (ver ShortLink / "Links curtos"): slug escolhido no card e a
-  // URL completa montada no salvamento (domínio do painel + /l/<slug>). Com
+  // URL completa montada no salvamento (SHORT_LINK_PUBLIC_ORIGIN + /l/<slug>). Com
   // ele, a 2ª mensagem usa o link curto no texto e no linkUrl do send-link.
   shortLinkSlug   String?
   shortLinkUrl    String?

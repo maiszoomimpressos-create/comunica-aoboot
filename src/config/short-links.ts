@@ -4,6 +4,10 @@
  */
 
 export const SHORT_LINK_PATH_PREFIX = "/l/";
+
+/** Domínio público dos links curtos (alias do projeto na Vercel; o
+ * comunica-aoboot.vercel.app continua respondendo também). */
+export const SHORT_LINK_PUBLIC_ORIGIN = "https://maiszap.vercel.app";
 export const SHORT_LINK_SLUG_MAX_LENGTH = 40;
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 

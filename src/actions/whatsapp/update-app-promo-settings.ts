@@ -4,7 +4,6 @@ import { z } from "zod";
 import { defineTenantAction } from "@/lib/server/actions/define-tenant-action";
 import { assertConnectionAccess } from "@/lib/rbac/connection-scope";
 import { updateAppPromoSettingsForConnection } from "@/services/ride-receipt-follow-up.service";
-import { getRequestOrigin } from "@/lib/server/request-origin";
 
 const schema = z.object({
   connectionId: z.string().min(1),
@@ -26,9 +25,6 @@ export const updateAppPromoSettingsAction = defineTenantAction(
   async (ctx, input: z.infer<typeof schema>) => {
     const parsed = schema.parse(input);
     assertConnectionAccess(ctx, parsed.connectionId);
-    return updateAppPromoSettingsForConnection(ctx.tenantId, parsed.connectionId, {
-      ...parsed,
-      publicOrigin: await getRequestOrigin(),
-    });
+    return updateAppPromoSettingsForConnection(ctx.tenantId, parsed.connectionId, parsed);
   }
 );

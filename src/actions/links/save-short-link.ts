@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 import { defineTenantAction } from "@/lib/server/actions/define-tenant-action";
-import { getRequestOrigin } from "@/lib/server/request-origin";
+import { SHORT_LINK_PUBLIC_ORIGIN } from "@/config/short-links";
 import { deleteShortLinkForTenant, saveShortLinkForTenant, toShortLinkView } from "@/services/short-link.service";
 
 const schema = z.object({
@@ -18,7 +18,7 @@ const schema = z.object({
 export const saveShortLinkAction = defineTenantAction("whatsapp.manage", async (ctx, input: z.infer<typeof schema>) => {
   const parsed = schema.parse(input);
   const saved = await saveShortLinkForTenant(ctx.tenantId, parsed);
-  return toShortLinkView((await getRequestOrigin()) ?? "", saved);
+  return toShortLinkView(SHORT_LINK_PUBLIC_ORIGIN, saved);
 });
 
 export const deleteShortLinkAction = defineTenantAction("whatsapp.manage", async (ctx, input: { id: string }) => {

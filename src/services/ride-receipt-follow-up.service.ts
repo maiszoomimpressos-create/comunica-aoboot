@@ -33,7 +33,7 @@ import {
   renderAppPromoLinkMessage,
   renderAppPromoLinkTitle,
 } from "@/config/ride-receipt-app-promo";
-import { buildShortLinkUrl } from "@/config/short-links";
+import { SHORT_LINK_PUBLIC_ORIGIN, buildShortLinkUrl } from "@/config/short-links";
 import { ensureShortLinkForTenant, validateSlugOrThrow } from "@/services/short-link.service";
 
 /** Teto de envios por tick — cada envio são 2 mensagens com 3-6 s entre
@@ -341,7 +341,7 @@ export interface UpdateAppPromoSettingsInput {
   linkImageUrl?: string | null;
   /** Slug do link curto (/l/<slug>) usado na 2ª mensagem; vazio = link longo. */
   shortLinkSlug?: string | null;
-  /** Domínio público pra montar a URL curta (a action passa o do painel). */
+  /** Domínio público da URL curta; padrão SHORT_LINK_PUBLIC_ORIGIN. */
   publicOrigin?: string | null;
 }
 
@@ -381,8 +381,7 @@ export async function updateAppPromoSettingsForConnection(
   let shortLinkUrl: string | null = null;
   if (shortLinkSlug) {
     if (!playStoreUrl) throw new ValidationError("Pra usar o link curto, informe o link da Play Store.");
-    const origin = input.publicOrigin?.trim() || process.env.NEXT_PUBLIC_APP_URL?.trim();
-    if (!origin) throw new ValidationError("Não deu pra descobrir o domínio do link curto.");
+    const origin = input.publicOrigin?.trim() || SHORT_LINK_PUBLIC_ORIGIN;
     const names = await getTenantMessageNames(tenantId);
     const businessName =
       connectionSummary.businessName || names?.messageBusinessName || names?.name || "";

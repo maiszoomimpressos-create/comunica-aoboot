@@ -13,7 +13,7 @@ import { NotificationTypesPanel } from "@/components/dashboard/whatsapp/notifica
 import { AppPromoSettingsCard } from "@/components/dashboard/whatsapp/app-promo-settings-card";
 import { listAppPromoSettings, getTenantMessageNames } from "@/repositories/app-promo-settings.repository";
 import { isRideReceiptNotificationType } from "@/config/ride-receipt-app-promo";
-import { getRequestOrigin } from "@/lib/server/request-origin";
+import { SHORT_LINK_PUBLIC_ORIGIN } from "@/config/short-links";
 
 export const metadata: Metadata = { title: "Funções" };
 
@@ -24,7 +24,7 @@ export default async function FuncoesPage({
 }) {
   const { tenantSlug } = await params;
   const ctx = await getRequestContext(tenantSlug);
-  const publicOrigin = (await getRequestOrigin()) ?? "";
+  const publicOrigin = SHORT_LINK_PUBLIC_ORIGIN;
   requirePermission(ctx, "whatsapp.view");
 
   const connections = filterAccessibleConnections(

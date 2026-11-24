@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { getRequestContext } from "@/lib/server/request-context";
 import { requirePermission } from "@/lib/rbac/require-permission";
-import { getRequestOrigin } from "@/lib/server/request-origin";
+import { SHORT_LINK_PUBLIC_ORIGIN } from "@/config/short-links";
 import { listShortLinksForTenant } from "@/services/short-link.service";
 import { ShortLinksManager } from "@/components/dashboard/links/short-links-manager";
 
@@ -12,7 +12,7 @@ export default async function LinksCurtosPage({ params }: { params: Promise<{ te
   const ctx = await getRequestContext(tenantSlug);
   requirePermission(ctx, "whatsapp.view");
 
-  const origin = (await getRequestOrigin()) ?? "";
+  const origin = SHORT_LINK_PUBLIC_ORIGIN;
   const links = await listShortLinksForTenant(ctx.tenantId, origin);
 
   return (

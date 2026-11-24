@@ -4,7 +4,7 @@ Ferramenta do painel (menu **Links curtos**, `/app/<empresa>/links`), multi-empr
 cada empresa só vê/edita/exclui os seus links (`short_link.tenantId`). O slug é único
 no sistema todo, porque a URL pública não leva a empresa.
 
-- **Público:** `https://<domínio>/l/<slug>`
+- **Público:** `https://maiszap.vercel.app/l/<slug> (também responde em comunica-aoboot.vercel.app)`
   - humano → `302` pro destino (+1 clique, `lastClickAt`);
   - crawler de prévia (WhatsApp, facebookexternalhit, Telegram, Slack…) → `200` com
     HTML Open Graph (título, descrição, imagem) + meta refresh.
