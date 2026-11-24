@@ -119,6 +119,15 @@ export interface WhatsappProvider {
     buttons: LinkButtonAction[],
     options?: { image?: string }
   ): Promise<SendLinkButtonsResult>;
+  /** Optional: text whose last line is a link, shown with a rich preview
+   * (title, description, thumbnail) — Z-API `send-link`. Providers without
+   * it fall back to plain sendMessage (WhatsApp may still build its own
+   * preview). Never throws. */
+  sendLink?(
+    config: WhatsappConnectionConfig,
+    to: string,
+    link: { message: string; linkUrl: string; title: string; description: string; image: string }
+  ): Promise<SendMessageResult>;
   /** Optional: "apagar para todos" of a message this number sent (Z-API
    * `DELETE /messages`). WhatsApp only allows it for about 2 days after
    * sending. Used by Publicidades "Apagar depois de". Never throws. */

@@ -16,6 +16,10 @@ export interface AppPromoSettingsInput {
   imageUrl: string | null;
   playStoreUrl: string | null;
   caption: string | null;
+  linkMessage: string | null;
+  linkTitle: string | null;
+  linkDescription: string | null;
+  linkImageUrl: string | null;
 }
 
 export function upsertAppPromoSettings(connectionId: string, input: AppPromoSettingsInput) {

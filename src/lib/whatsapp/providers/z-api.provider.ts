@@ -520,6 +520,25 @@ export class ZApiProvider implements WhatsappProvider {
     });
   }
 
+  /** `send-link` — texto com o link no FIM + prévia (título, descrição,
+   * miniatura). linkType LARGE = prévia grande, como a do WhatsApp quando
+   * alguém cola um link da Play Store. developer.z-api.io/en/message/send-message-link */
+  async sendLink(
+    config: WhatsappConnectionConfig,
+    to: string,
+    link: { message: string; linkUrl: string; title: string; description: string; image: string }
+  ): Promise<SendMessageResult> {
+    return this.postJson(config, "send-link", {
+      phone: to,
+      message: link.message,
+      image: link.image,
+      linkUrl: link.linkUrl,
+      title: link.title,
+      linkDescription: link.description,
+      linkType: "LARGE",
+    });
+  }
+
   /** `send-video` — sibling endpoint of `send-image`, same envelope.
    * **Not yet confirmed against a real Z-API instance** (send-image was;
    * see the class doc comment) — used only by the Campanhas module. */

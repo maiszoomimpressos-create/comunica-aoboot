@@ -113,6 +113,10 @@ export default async function FuncoesPage({
                             imageUrl: appPromo.imageUrl,
                             playStoreUrl: appPromo.playStoreUrl,
                             caption: appPromo.caption,
+                            linkMessage: appPromo.linkMessage,
+                            linkTitle: appPromo.linkTitle,
+                            linkDescription: appPromo.linkDescription,
+                            linkImageUrl: appPromo.linkImageUrl,
                           }
                         : null
                     }

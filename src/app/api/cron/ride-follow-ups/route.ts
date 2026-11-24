@@ -12,6 +12,9 @@ import { dispatchDueRideReceiptFollowUps } from "@/services/ride-receipt-follow-
  *
  * Auth: mesmo segredo compartilhado (CRON_DISPATCH_SECRET) dos outros crons.
  */
+export const maxDuration = 60;
+export const dynamic = "force-dynamic";
+
 export async function POST(request: NextRequest) {
   const secret = process.env.CRON_DISPATCH_SECRET;
   if (!secret) {

@@ -1678,6 +1678,14 @@ model AppPromoSettings {
   // Aceita {{link}} e {{nome_empresa}}; se não tiver {{link}}, o link é
   // acrescentado no fim automaticamente.
   caption      String?
+  // 2ª mensagem (3-6 s depois da imagem): texto com o link e prévia da
+  // Play Store (Z-API send-link). Nulos = textos padrão
+  // (config/ride-receipt-app-promo.ts). linkImageUrl = miniatura da prévia
+  // (ícone do app); sem ela, usa imageUrl.
+  linkMessage     String?
+  linkTitle       String?
+  linkDescription String?
+  linkImageUrl    String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -1715,6 +1723,11 @@ model RideReceiptFollowUp {
   lastError        String?
   // messageId/zaapId que o provedor devolveu pro recibo (só rastreio).
   receiptMessageId String?
+  // 1ª parte (imagem) já saiu? Numa retentativa só a 2ª parte (link) é
+  // reenviada — o passageiro nunca recebe a imagem duas vezes.
+  imageSentAt      DateTime?
+  imageMessageId   String?
+  linkMessageId    String?
   createdAt        DateTime                  @default(now())
   updatedAt        DateTime                  @updatedAt
 

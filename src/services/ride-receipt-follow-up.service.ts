@@ -14,6 +14,7 @@ import {
   createRideReceiptFollowUpIfAbsent,
   markRideReceiptFollowUpCancelled,
   markRideReceiptFollowUpFailed,
+  markRideReceiptFollowUpImageSent,
   markRideReceiptFollowUpSent,
   recoverStuckRideReceiptFollowUps,
   rescheduleRideReceiptFollowUp,
@@ -21,13 +22,20 @@ import {
 } from "@/repositories/ride-receipt-follow-up.repository";
 import {
   APP_PROMO_CAPTION_MAX_LENGTH,
+  APP_PROMO_LINK_DESCRIPTION_MAX_LENGTH,
+  APP_PROMO_LINK_TITLE_MAX_LENGTH,
   randomAppPromoDelayMs,
-  renderAppPromoCaption,
+  randomAppPromoLinkGapMs,
+  renderAppPromoImageCaption,
+  renderAppPromoLinkDescription,
+  renderAppPromoLinkMessage,
+  renderAppPromoLinkTitle,
 } from "@/config/ride-receipt-app-promo";
 
-/** Teto de envios por tick — com o pinger batendo ~1x/min, só alguns ficam
- * vencidos por vez; isso limita o pior caso (backlog depois de downtime). */
-const CLAIM_LIMIT_PER_TICK = 50;
+/** Teto de envios por tick — cada envio são 2 mensagens com 3-6 s entre
+ * elas, então 6 por tick cabem com folga no maxDuration (60 s) da rota;
+ * com o pinger ~1x/min, o resto sai no tick seguinte. */
+const CLAIM_LIMIT_PER_TICK = 6;
 /** PROCESSING há mais que isso = processo caiu no meio; volta pra PENDING. */
 const STUCK_THRESHOLD_MS = 10 * 60 * 1000;
 /** Tentativas totais (a primeira + retentativas) antes de virar FAILED. */
@@ -176,7 +184,7 @@ async function processFollowUp(item: ClaimedRideReceiptFollowUp, now: Date, summ
 
   const businessName =
     connection.businessName || connection.organization.messageBusinessName || connection.organization.name;
-  const caption = renderAppPromoCaption(settings.caption, { link: settings.playStoreUrl, businessName });
+  const link = settings.playStoreUrl;
 
   const provider = getWhatsappProvider(connection.provider.key);
   const config = {
@@ -185,9 +193,40 @@ async function processFollowUp(item: ClaimedRideReceiptFollowUp, now: Date, summ
     phoneNumber: connection.phoneNumber,
   };
 
-  const result = await provider.sendImage(config, item.toPhone, settings.imageUrl, caption);
-  if (result.ok) {
-    await markRideReceiptFollowUpSent(item.id, new Date());
+  // 1/2 — imagem com legenda curta, SEM link. Numa retentativa em que a
+  // imagem já saiu (imageSentAt), pula direto pra 2ª parte.
+  if (!item.imageSentAt) {
+    const caption = renderAppPromoImageCaption(settings.caption, { businessName, link });
+    const imageResult = await provider.sendImage(config, item.toPhone, settings.imageUrl, caption);
+    if (!imageResult.ok) {
+      await logBotEvent("warn", "ride_follow_up_send_failed", {
+        followUpId: item.id,
+        connectionId: connection.id,
+        attempts: item.attempts,
+        part: "image",
+        message: imageResult.message,
+      });
+      await retryOrFail(item, now, imageResult.message, summary);
+      return;
+    }
+    await markRideReceiptFollowUpImageSent(item.id, new Date(), imageResult.messageId ?? null);
+    await new Promise((resolve) => setTimeout(resolve, randomAppPromoLinkGapMs()));
+  }
+
+  // 2/2 — convite + link da Play Store com prévia (send-link). Sem
+  // send-link no provedor, texto comum (o WhatsApp monta a prévia sozinho).
+  const message = renderAppPromoLinkMessage(settings.linkMessage, { link, businessName });
+  const linkResult = provider.sendLink
+    ? await provider.sendLink(config, item.toPhone, {
+        message,
+        linkUrl: link,
+        title: renderAppPromoLinkTitle(settings.linkTitle, businessName),
+        description: renderAppPromoLinkDescription(settings.linkDescription, businessName),
+        image: settings.linkImageUrl || settings.imageUrl,
+      })
+    : await provider.sendMessage(config, item.toPhone, message);
+  if (linkResult.ok) {
+    await markRideReceiptFollowUpSent(item.id, new Date(), linkResult.messageId ?? null);
     summary.sent++;
     return;
   }
@@ -196,9 +235,10 @@ async function processFollowUp(item: ClaimedRideReceiptFollowUp, now: Date, summ
     followUpId: item.id,
     connectionId: connection.id,
     attempts: item.attempts,
-    message: result.message,
+    part: "link",
+    message: linkResult.message,
   });
-  await retryOrFail(item, now, result.message, summary);
+  await retryOrFail(item, now, linkResult.message, summary);
 }
 
 // ---------------------------------------------------------------------
@@ -228,6 +268,10 @@ export interface UpdateAppPromoSettingsInput {
   imageUrl?: string | null;
   playStoreUrl?: string | null;
   caption?: string | null;
+  linkMessage?: string | null;
+  linkTitle?: string | null;
+  linkDescription?: string | null;
+  linkImageUrl?: string | null;
 }
 
 export async function updateAppPromoSettingsForConnection(
@@ -243,6 +287,21 @@ export async function updateAppPromoSettingsForConnection(
   if (caption && caption.length > APP_PROMO_CAPTION_MAX_LENGTH) {
     throw new ValidationError(`A legenda pode ter no máximo ${APP_PROMO_CAPTION_MAX_LENGTH} caracteres.`);
   }
+  const linkMessage = input.linkMessage?.trim() || null;
+  if (linkMessage && linkMessage.length > APP_PROMO_CAPTION_MAX_LENGTH) {
+    throw new ValidationError(`O texto do link pode ter no máximo ${APP_PROMO_CAPTION_MAX_LENGTH} caracteres.`);
+  }
+  const linkTitle = input.linkTitle?.trim() || null;
+  if (linkTitle && linkTitle.length > APP_PROMO_LINK_TITLE_MAX_LENGTH) {
+    throw new ValidationError(`O título da prévia pode ter no máximo ${APP_PROMO_LINK_TITLE_MAX_LENGTH} caracteres.`);
+  }
+  const linkDescription = input.linkDescription?.trim() || null;
+  if (linkDescription && linkDescription.length > APP_PROMO_LINK_DESCRIPTION_MAX_LENGTH) {
+    throw new ValidationError(
+      `A descrição da prévia pode ter no máximo ${APP_PROMO_LINK_DESCRIPTION_MAX_LENGTH} caracteres.`
+    );
+  }
+  const linkImageUrl = normalizeHttpsUrl(input.linkImageUrl, "Miniatura da prévia");
   if (input.enabled && (!imageUrl || !playStoreUrl)) {
     throw new ValidationError("Pra ligar o envio, informe a imagem e o link da Play Store.");
   }
@@ -252,12 +311,20 @@ export async function updateAppPromoSettingsForConnection(
     imageUrl,
     playStoreUrl,
     caption,
+    linkMessage,
+    linkTitle,
+    linkDescription,
+    linkImageUrl,
   });
   return {
     enabled: saved.enabled,
     imageUrl: saved.imageUrl,
     playStoreUrl: saved.playStoreUrl,
     caption: saved.caption,
+    linkMessage: saved.linkMessage,
+    linkTitle: saved.linkTitle,
+    linkDescription: saved.linkDescription,
+    linkImageUrl: saved.linkImageUrl,
   };
 }
 

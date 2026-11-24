@@ -61,10 +61,19 @@ export async function claimDueRideReceiptFollowUps(now: Date, limit: number) {
 
 export type ClaimedRideReceiptFollowUp = Awaited<ReturnType<typeof claimDueRideReceiptFollowUps>>[number];
 
-export function markRideReceiptFollowUpSent(id: string, now: Date) {
+/** 1ª parte (imagem) entregue ao provedor — a linha continua PROCESSING;
+ * numa retentativa só a 2ª parte (link) sai de novo. */
+export function markRideReceiptFollowUpImageSent(id: string, now: Date, messageId: string | null) {
   return prisma.rideReceiptFollowUp.update({
     where: { id },
-    data: { status: "SENT", sentAt: now, lockedAt: null, lastError: null },
+    data: { imageSentAt: now, imageMessageId: messageId },
+  });
+}
+
+export function markRideReceiptFollowUpSent(id: string, now: Date, linkMessageId: string | null = null) {
+  return prisma.rideReceiptFollowUp.update({
+    where: { id },
+    data: { status: "SENT", sentAt: now, lockedAt: null, lastError: null, linkMessageId },
   });
 }
 

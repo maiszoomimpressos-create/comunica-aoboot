@@ -11,6 +11,10 @@ const schema = z.object({
   imageUrl: z.string().nullable().optional(),
   playStoreUrl: z.string().nullable().optional(),
   caption: z.string().nullable().optional(),
+  linkMessage: z.string().nullable().optional(),
+  linkTitle: z.string().nullable().optional(),
+  linkDescription: z.string().nullable().optional(),
+  linkImageUrl: z.string().nullable().optional(),
 });
 
 /** Tenant-facing: imagem + link da Play Store enviados 3-5 min depois do

@@ -65,3 +65,14 @@ Qualquer outro texto é tratado como "não é app", e a divulgação é enviada.
 
 Código: `src/lib/notifications/ride-request-source.ts`, aplicado em
 `sendPurchaseConfirmation` (`src/services/whatsapp-connection.service.ts`).
+
+## Envio em 2 mensagens (24/11/2026)
+
+O follow-up pós-corrida (3–5 min depois do recibo) agora sai em duas partes:
+
+1. **Imagem** (banner) com legenda curta de agradecimento — **sem link** (qualquer `{{link}}`/URL é removido da legenda).
+2. **3–6 s depois**, o convite com o link da Play Store via Z-API `send-link` (título, descrição e miniatura configuráveis no card), pra o WhatsApp mostrar a prévia. O link fica sempre no fim do texto (exigência do `send-link`).
+
+Se a imagem sair e o link falhar, a retentativa manda só o link (`imageSentAt` marcado). As regras continuam: não envia se `requestSource=app`, nunca junto com a Publicidade, cancela se atrasar mais de 1 h.
+
+Observação Z-API: o link só fica clicável se o passageiro já tiver o número salvo ou já tiver conversado — no fluxo do recibo isso costuma valer, mas não é garantido.

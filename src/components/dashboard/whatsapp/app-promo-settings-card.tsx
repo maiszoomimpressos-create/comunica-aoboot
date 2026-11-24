@@ -11,8 +11,16 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
   APP_PROMO_CAPTION_MAX_LENGTH,
+  APP_PROMO_LINK_DESCRIPTION_MAX_LENGTH,
+  APP_PROMO_LINK_TITLE_MAX_LENGTH,
   DEFAULT_APP_PROMO_CAPTION,
-  renderAppPromoCaption,
+  DEFAULT_APP_PROMO_LINK_DESCRIPTION,
+  DEFAULT_APP_PROMO_LINK_MESSAGE,
+  DEFAULT_APP_PROMO_LINK_TITLE,
+  renderAppPromoImageCaption,
+  renderAppPromoLinkDescription,
+  renderAppPromoLinkMessage,
+  renderAppPromoLinkTitle,
 } from "@/config/ride-receipt-app-promo";
 import { updateAppPromoSettingsAction } from "@/actions/whatsapp/update-app-promo-settings";
 import { uploadAppPromoImageAction } from "@/actions/whatsapp/upload-app-promo-image";
@@ -22,6 +30,10 @@ export interface AppPromoSettingsValues {
   imageUrl: string | null;
   playStoreUrl: string | null;
   caption: string | null;
+  linkMessage?: string | null;
+  linkTitle?: string | null;
+  linkDescription?: string | null;
+  linkImageUrl?: string | null;
 }
 
 /** Abaixo do limite de 1 MB do corpo de Server Action (com folga pro
@@ -83,15 +95,21 @@ export function AppPromoSettingsCard({
   const [imageUrl, setImageUrl] = useState(initial?.imageUrl ?? "");
   const [playStoreUrl, setPlayStoreUrl] = useState(initial?.playStoreUrl ?? "");
   const [caption, setCaption] = useState(initial?.caption ?? "");
+  const [linkMessage, setLinkMessage] = useState(initial?.linkMessage ?? "");
+  const [linkTitle, setLinkTitle] = useState(initial?.linkTitle ?? "");
+  const [linkDescription, setLinkDescription] = useState(initial?.linkDescription ?? "");
+  const [linkImageUrl, setLinkImageUrl] = useState(initial?.linkImageUrl ?? "");
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
-  const preview = renderAppPromoCaption(caption, {
-    link: playStoreUrl.trim() || "https://play.google.com/store/apps/details?id=…",
-    businessName,
-  });
+  const previewLink = playStoreUrl.trim() || "https://play.google.com/store/apps/details?id=…";
+  const preview = renderAppPromoImageCaption(caption, { businessName, link: playStoreUrl.trim() || undefined });
+  const linkPreview = renderAppPromoLinkMessage(linkMessage, { link: previewLink, businessName });
+  const linkPreviewTitle = renderAppPromoLinkTitle(linkTitle, businessName);
+  const linkPreviewDescription = renderAppPromoLinkDescription(linkDescription, businessName);
+  const linkPreviewImage = linkImageUrl.trim() || imageUrl.trim();
 
   async function handleFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -128,6 +146,10 @@ export function AppPromoSettingsCard({
       imageUrl: imageUrl.trim() || null,
       playStoreUrl: playStoreUrl.trim() || null,
       caption: caption.trim() || null,
+      linkMessage: linkMessage.trim() || null,
+      linkTitle: linkTitle.trim() || null,
+      linkDescription: linkDescription.trim() || null,
+      linkImageUrl: linkImageUrl.trim() || null,
     });
     setSaving(false);
     if (!result.success) {
@@ -147,8 +169,9 @@ export function AppPromoSettingsCard({
             <h3 className="font-medium">Divulgar o app depois da corrida</h3>
             <p className="text-sm text-muted-foreground">
               Entre 3 e 5 minutos depois do recibo da corrida (<strong>Corrida concluída</strong> ou a função
-              <strong> corrida_mai_drive</strong>), o passageiro recebe uma
-              imagem com o link do app na Play Store. Corridas pedidas pelo próprio app do passageiro não
+              <strong> corrida_mai_drive</strong>), o passageiro recebe duas
+              mensagens: a imagem com uma legenda curta e, segundos depois, o convite com o link da Play Store
+              (com prévia). Corridas pedidas pelo próprio app do passageiro não
               recebem (ele já tem o app).
             </p>
           </div>
@@ -219,7 +242,7 @@ export function AppPromoSettingsCard({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor={`app-promo-caption-${connectionId}`}>Legenda (opcional)</Label>
+            <Label htmlFor={`app-promo-caption-${connectionId}`}>Legenda da imagem (opcional)</Label>
             <Textarea
               id={`app-promo-caption-${connectionId}`}
               rows={5}
@@ -232,9 +255,67 @@ export function AppPromoSettingsCard({
               placeholder={DEFAULT_APP_PROMO_CAPTION}
             />
             <p className="text-xs text-muted-foreground">
-              Em branco usa o texto padrão. Use {"{{link}}"} pro link e {"{{nome_empresa}}"} pro nome do negócio — se
-              não tiver {"{{link}}"}, o link vai no final.
+              Em branco usa o texto padrão. {"{{nome_empresa}}"} vira o nome do negócio. A legenda não leva link —
+              ele vai na mensagem seguinte.
             </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor={`app-promo-link-message-${connectionId}`}>Mensagem com o link (opcional)</Label>
+            <Textarea
+              id={`app-promo-link-message-${connectionId}`}
+              rows={2}
+              maxLength={APP_PROMO_CAPTION_MAX_LENGTH}
+              value={linkMessage}
+              onChange={(e) => {
+                setSaved(false);
+                setLinkMessage(e.target.value);
+              }}
+              placeholder={DEFAULT_APP_PROMO_LINK_MESSAGE}
+            />
+            <p className="text-xs text-muted-foreground">Sai 3 a 6 segundos depois da imagem; o link vai sempre no final.</p>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor={`app-promo-link-title-${connectionId}`}>Título da prévia</Label>
+              <Input
+                id={`app-promo-link-title-${connectionId}`}
+                maxLength={APP_PROMO_LINK_TITLE_MAX_LENGTH}
+                value={linkTitle}
+                onChange={(e) => {
+                  setSaved(false);
+                  setLinkTitle(e.target.value);
+                }}
+                placeholder={DEFAULT_APP_PROMO_LINK_TITLE}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`app-promo-link-description-${connectionId}`}>Descrição da prévia</Label>
+              <Input
+                id={`app-promo-link-description-${connectionId}`}
+                maxLength={APP_PROMO_LINK_DESCRIPTION_MAX_LENGTH}
+                value={linkDescription}
+                onChange={(e) => {
+                  setSaved(false);
+                  setLinkDescription(e.target.value);
+                }}
+                placeholder={DEFAULT_APP_PROMO_LINK_DESCRIPTION}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor={`app-promo-link-image-${connectionId}`}>Miniatura da prévia (ícone do app, opcional)</Label>
+            <Input
+              id={`app-promo-link-image-${connectionId}`}
+              value={linkImageUrl}
+              onChange={(e) => {
+                setSaved(false);
+                setLinkImageUrl(e.target.value);
+              }}
+              placeholder="https://… (em branco usa a imagem acima)"
+            />
           </div>
         </div>
 
@@ -249,6 +330,19 @@ export function AppPromoSettingsCard({
             </div>
           )}
           <p className="whitespace-pre-wrap break-words text-sm text-foreground">{preview}</p>
+          <div className="mt-3 space-y-2 rounded-md border border-border bg-background p-3">
+            <div className="flex items-center gap-3 rounded-md bg-muted/50 p-2">
+              {linkPreviewImage ? (
+                // eslint-disable-next-line @next/next/no-img-element -- URL externa arbitrária, só pré-visualização
+                <img src={linkPreviewImage} alt="" className="size-12 rounded object-cover" />
+              ) : null}
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{linkPreviewTitle}</p>
+                <p className="truncate text-xs text-muted-foreground">{linkPreviewDescription}</p>
+              </div>
+            </div>
+            <p className="whitespace-pre-wrap break-words text-sm text-foreground">{linkPreview}</p>
+          </div>
         </div>
       </div>
 
