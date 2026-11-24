@@ -18,9 +18,11 @@ export function isRideReceiptNotificationType(key: string | null | undefined): b
   return !!key && RIDE_RECEIPT_NOTIFICATION_TYPES.includes(key);
 }
 
-/** Atraso aleatório entre o recibo e a imagem — 3 a 5 minutos. */
+/** Atraso aleatório entre o recibo e a imagem — 3 a 4,5 minutos. O teto
+ * fica abaixo de 5 min porque o envio acontece dentro da própria função do
+ * recibo (after(), maxDuration 300 s) — ver scheduleInlineRideFollowUpDispatch. */
 export const APP_PROMO_MIN_DELAY_MS = 3 * 60 * 1000;
-export const APP_PROMO_MAX_DELAY_MS = 5 * 60 * 1000;
+export const APP_PROMO_MAX_DELAY_MS = 4.5 * 60 * 1000;
 
 export const APP_PROMO_CAPTION_MAX_LENGTH = 1000;
 export const APP_PROMO_LINK_TITLE_MAX_LENGTH = 80;

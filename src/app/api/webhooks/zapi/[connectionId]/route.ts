@@ -17,6 +17,10 @@ import { recordWebhookEvent } from "@/services/whatsapp-connection.service";
  * concrete feature consuming them. A webhook endpoint's only real job is
  * to ack fast and never lose the event, so this stays intentionally thin.
  */
+// Tarefas em after() (publicidade 30 s depois do RECEIVED, convite
+// pós-corrida vencido) precisam de folga além do ack rápido.
+export const maxDuration = 60;
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ connectionId: string }> }

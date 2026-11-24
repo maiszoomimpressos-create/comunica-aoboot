@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { put } from "@vercel/blob";
+import { after } from "next/server";
 import { decryptSecret } from "@/lib/crypto/secret-box";
 import { getWhatsappProvider } from "@/lib/whatsapp/registry";
 import { logBotEvent, serializeError } from "@/lib/logging/bot-attendant-logger";
@@ -46,7 +47,8 @@ const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 2 * 60 * 1000;
 /** Se o cron ficou parado e a imagem venceu há mais que isso, ela não é
  * mais enviada — chegar horas depois da corrida não faz sentido. */
-const EXPIRE_AFTER_MS = 60 * 60 * 1000;
+/** Convite atrasado mais que isso é cancelado (não chega fora de contexto). */
+const EXPIRE_AFTER_MS = 30 * 60 * 1000;
 
 const MAX_UPLOAD_BYTES = 1_000_000;
 const ALLOWED_IMAGE_TYPES: Record<string, string> = {
@@ -151,6 +153,66 @@ export async function dispatchDueRideReceiptFollowUps(): Promise<RideFollowUpDis
   return summary;
 }
 
+// ---------------------------------------------------------------------
+// Disparo sem cron externo
+// ---------------------------------------------------------------------
+
+/** Folga dentro do maxDuration (300 s) da rota do recibo. */
+const INLINE_MAX_WAIT_MS = 275_000;
+
+/**
+ * Chamado logo depois de agendar o convite: em after() (a resposta do
+ * recibo já foi), espera até o horário agendado e processa a fila. A trava
+ * de claim (PENDING→PROCESSING) garante que, se o cron ou outro tick pegar
+ * antes, não sai duplicado. Se a função morrer, o tick dos webhooks
+ * (tickRideFollowUpsOpportunistically) e o cron (se um dia configurado)
+ * pegam depois, dentro do limite de 30 min.
+ */
+export function scheduleInlineRideFollowUpDispatch(scheduledAt: Date, startedAt = Date.now()): void {
+  try {
+    after(async () => {
+      const budget = INLINE_MAX_WAIT_MS - (Date.now() - startedAt);
+      const wait = Math.min(Math.max(0, scheduledAt.getTime() - Date.now()), Math.max(0, budget));
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+      try {
+        const summary = await dispatchDueRideReceiptFollowUps();
+        if (summary.claimed > 0) await logBotEvent("info", "ride_follow_up_inline_tick", { ...summary });
+      } catch (err) {
+        await logBotEvent("error", "ride_follow_up_inline_tick_failed", { error: serializeError(err) });
+      }
+    });
+  } catch {
+    // fora de request (script) — o tick dos webhooks/cron cobre
+  }
+}
+
+/** Por instância: no máximo 1 tick oportunista a cada 30 s. */
+const OPPORTUNISTIC_TICK_INTERVAL_MS = 30_000;
+let lastOpportunisticTickAt = 0;
+
+/**
+ * Rede de segurança: a cada webhook da Z-API (chegam o tempo todo: status
+ * de entrega, mensagens…), processa convites vencidos em after(). Barato
+ * (uma consulta quando não há nada) e com throttle por instância.
+ */
+export function tickRideFollowUpsOpportunistically(): void {
+  const now = Date.now();
+  if (now - lastOpportunisticTickAt < OPPORTUNISTIC_TICK_INTERVAL_MS) return;
+  lastOpportunisticTickAt = now;
+  try {
+    after(async () => {
+      try {
+        const summary = await dispatchDueRideReceiptFollowUps();
+        if (summary.claimed > 0) await logBotEvent("info", "ride_follow_up_opportunistic_tick", { ...summary });
+      } catch (err) {
+        await logBotEvent("error", "ride_follow_up_opportunistic_tick_failed", { error: serializeError(err) });
+      }
+    });
+  } catch {
+    // fora de request
+  }
+}
+
 async function retryOrFail(
   item: ClaimedRideReceiptFollowUp,
   now: Date,
@@ -176,7 +238,7 @@ async function processFollowUp(item: ClaimedRideReceiptFollowUp, now: Date, summ
     return;
   }
   if (now.getTime() - item.scheduledAt.getTime() > EXPIRE_AFTER_MS) {
-    await markRideReceiptFollowUpCancelled(item.id, "Expirado: o cron não rodou a tempo (mais de 1h de atraso).");
+    await markRideReceiptFollowUpCancelled(item.id, "Expirado: não saiu a tempo (mais de 30 min de atraso).");
     summary.cancelled++;
     return;
   }

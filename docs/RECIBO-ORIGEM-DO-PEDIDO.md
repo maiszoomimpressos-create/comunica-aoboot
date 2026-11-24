@@ -76,3 +76,13 @@ O follow-up pós-corrida (3–5 min depois do recibo) agora sai em duas partes:
 Se a imagem sair e o link falhar, a retentativa manda só o link (`imageSentAt` marcado). As regras continuam: não envia se `requestSource=app`, nunca junto com a Publicidade, cancela se atrasar mais de 1 h.
 
 Observação Z-API: o link só fica clicável se o passageiro já tiver o número salvo ou já tiver conversado — no fluxo do recibo isso costuma valer, mas não é garantido.
+
+## Recibo repetido e disparo sem cron (24/11/2026)
+
+**Recibo em dobro.** O Mai Drive chama o `purchase-confirmation` 2x para a mesma corrida (4–11 s de diferença). Agora há uma trava (`notification_dedup`, chave única por conexão):
+- chave explícita, se vier: header `Idempotency-Key`, campo `idempotencyKey` ou `details.id_corrida` (vale para qualquer tipo);
+- sem chave explícita, só no recibo de corrida: hash de tipo + telefone + dados + nota.
+
+Se a mesma chave chegar de novo em até 30 min, nada é reenviado: a resposta é 200 com `duplicate: true` e o `messageId` da 1ª mensagem. Se o envio falhar, a chave é liberada para a nova tentativa.
+
+**Convite sem cron externo.** O próprio recibo, em `after()` (rota com `maxDuration` 300 s), espera o horário agendado (3 a 4,5 min) e processa a fila. A trava PENDING→PROCESSING impede envio duplicado. Como rede de segurança, cada webhook da Z-API (no máximo 1x a cada 30 s por instância) processa os convites vencidos. Convite com mais de 30 min de atraso é cancelado. O cron `/api/cron/*` continua funcionando, se um dia for configurado.

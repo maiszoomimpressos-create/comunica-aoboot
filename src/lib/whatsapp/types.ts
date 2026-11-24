@@ -50,6 +50,8 @@ export interface SendMessageResult {
   /** Id da mensagem no provedor (Z-API: `messageId`) — liga o callback de
    * status (entregue/lido) ao envio. */
   messageId?: string;
+  /** true quando o envio foi pulado por ser repetido (ver receipt-dedup). */
+  duplicate?: boolean;
 }
 
 /** Resultado do phone-exists: `ok: false` = não deu pra verificar (rede,

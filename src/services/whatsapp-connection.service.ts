@@ -27,6 +27,12 @@ import {
   scheduleAdvertisementAfterNotification,
 } from "@/services/advertisement-schedule.service";
 import { extractMessageId } from "@/lib/whatsapp/send-message-plan";
+import { computeReceiptDedupKey } from "@/lib/notifications/receipt-dedup";
+import {
+  claimNotificationDedup,
+  markNotificationDedupSent,
+  releaseNotificationDedup,
+} from "@/repositories/notification-dedup.repository";
 import type {
   QrCodeResult,
   SendMessageResult,
@@ -63,7 +69,11 @@ import {
   resolveRideRequestSource,
   rideAllowsPromotions,
 } from "@/lib/notifications/ride-request-source";
-import { scheduleRideReceiptFollowUp } from "@/services/ride-receipt-follow-up.service";
+import {
+  scheduleInlineRideFollowUpDispatch,
+  scheduleRideReceiptFollowUp,
+  tickRideFollowUpsOpportunistically,
+} from "@/services/ride-receipt-follow-up.service";
 import {
   applyCampaignMessageStatus,
   rememberInboundContactName,
@@ -694,6 +704,9 @@ export async function recordWebhookEvent(connectionId: string, payload: unknown)
   // Publicidades: o RECEIVED de um recibo libera a publicidade da fila
   // (30 s depois, em after()). Outros eventos: não faz nada. Nunca lança.
   onWebhookForAdvertisements(connectionId, payload);
+  // Rede de segurança do convite pós-corrida (sem cron externo): processa
+  // convites vencidos em after(), com throttle. Nunca lança.
+  tickRideFollowUpsOpportunistically();
   // Entregue / lido dos envios de campanha (MessageStatusCallback).
   await applyCampaignMessageStatus(connectionId, payload).catch((err) => {
     void logBotEvent("error", "apply_campaign_message_status_failed", { connectionId, error: serializeError(err) });
@@ -733,6 +746,10 @@ export interface PurchaseConfirmationInput {
    * do recibo. Opcional — também aceito em details.canal_pedido. Ver
    * lib/notifications/ride-request-source.ts. */
   requestSource?: string;
+  /** Chave de idempotência opcional (header Idempotency-Key ou campo
+   * idempotencyKey; também aceita details.id_corrida). Mesma chave em até
+   * 30 min = não reenvia. Ver lib/notifications/receipt-dedup.ts. */
+  idempotencyKey?: string;
 }
 
 /**
@@ -793,6 +810,69 @@ export async function sendPurchaseConfirmation(
     throw new ValidationError(`O tipo "${resolvedKey}" exige o campo qrData.`);
   }
 
+  // Trava contra recibo repetido: o Mai Drive chama 2x a mesma corrida
+  // (4-11 s de diferença). A 2ª chamada responde 200 com duplicate:true e o
+  // id da 1ª mensagem, sem reenviar. Se o envio falhar, a chave é liberada.
+  const dedupKey = computeReceiptDedupKey({
+    type: resolvedKey,
+    to: input.to,
+    details: input.details,
+    note: input.note,
+    qrData: input.qrData,
+    explicitKey: input.idempotencyKey,
+    isRideReceipt: isRideReceiptNotificationType(resolvedKey),
+  });
+  const dedupClaim = dedupKey ? await claimNotificationDedup(connection.id, dedupKey) : null;
+  if (dedupClaim && !dedupClaim.claimed) {
+    await logBotEvent("info", "notification.duplicate_skipped", {
+      connectionId: connection.id,
+      notificationType: resolvedKey,
+      firstMessageId: dedupClaim.messageId,
+      inFlight: dedupClaim.inFlight,
+    });
+    return {
+      ok: true,
+      duplicate: true,
+      message: "Mensagem repetida: a mesma já foi enviada há pouco, não reenviada.",
+      ...(dedupClaim.messageId ? { messageId: dedupClaim.messageId } : {}),
+    };
+  }
+  const dedupId = dedupClaim?.claimed ? dedupClaim.id : null;
+  try {
+    const result = await sendPurchaseConfirmationClaimed(connection, input, {
+      resolvedKey,
+      builtInType,
+      customType,
+      details,
+    });
+    if (dedupId) {
+      if (result.ok) await markNotificationDedupSent(dedupId, result.messageId ?? extractMessageId(result.raw) ?? null);
+      else await releaseNotificationDedup(dedupId);
+    }
+    return result;
+  } catch (err) {
+    if (dedupId) await releaseNotificationDedup(dedupId).catch(() => undefined);
+    throw err;
+  }
+}
+
+type PurchaseConnection = NonNullable<Awaited<ReturnType<typeof getConnectionByApiKeyHash>>>;
+
+/** O envio de fato (depois de validar e reservar a chave anti-repetição). */
+async function sendPurchaseConfirmationClaimed(
+  connection: PurchaseConnection,
+  input: PurchaseConfirmationInput,
+  resolved: {
+    resolvedKey: string;
+    builtInType: (typeof NOTIFICATION_TYPES)[number] | undefined;
+    customType: Awaited<ReturnType<typeof getCustomNotificationTypeByKey>>;
+    details: NotificationDetails;
+  }
+): Promise<SendMessageResult> {
+  const { resolvedKey, builtInType, customType, details } = resolved;
+  if (!connection.apiUrl || !connection.apiTokenCipher) {
+    throw new ConflictError("Esta conexão não está totalmente configurada.");
+  }
   await touchApiKeyLastUsed(connection.id);
 
   const apiToken = decryptSecret(connection.apiTokenCipher);
@@ -896,6 +976,9 @@ export async function sendPurchaseConfirmation(
       return null;
     });
     rideAppPromoActive = followUp?.active === true;
+    // Sem cron externo: o próprio recibo dispara o convite no horário
+    // (after(), ver scheduleInlineRideFollowUpDispatch).
+    if (followUp?.scheduled && followUp.scheduledAt) scheduleInlineRideFollowUpDispatch(followUp.scheduledAt);
   }
   const promotions = planPostNotificationPromotions({
     isRideReceipt,

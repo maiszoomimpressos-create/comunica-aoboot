@@ -1726,6 +1726,26 @@ model ShortLink {
   @@map("short_link")
 }
 
+// Trava contra recibo repetido no POST /api/v1/whatsapp/purchase-confirmation
+// (o Mai Drive chama 2x a mesma corrida, 4-11 s de diferença). Chave única
+// por conexão: Idempotency-Key / idempotencyKey / details.id_corrida quando
+// vier; senão (só recibo de corrida) hash de tipo+telefone+dados. Janela de
+// 30 min (linhas mais velhas são ignoradas/apagadas). status SENDING enquanto
+// o 1º envio está em andamento; SENT com o messageId; falhou = linha apagada.
+model NotificationDedup {
+  id           String   @id @default(cuid())
+  connectionId String
+  dedupKey     String
+  status       String   @default("SENDING")
+  messageId    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([connectionId, dedupKey])
+  @@index([createdAt])
+  @@map("notification_dedup")
+}
+
 enum RideReceiptFollowUpStatus {
   PENDING
   PROCESSING

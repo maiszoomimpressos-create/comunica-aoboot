@@ -16,6 +16,9 @@ const bodySchema = z.object({
   // Recibo de corrida: canal do pedido ("app", "whatsapp", "motorista",
   // "macaneta"). Opcional; ver docs/RECIBO-ORIGEM-DO-PEDIDO.md.
   requestSource: z.string().max(40, "Máximo de 40 caracteres.").optional(),
+  // Opcional: mesma chave em até 30 min = não reenvia (responde
+  // duplicate:true). Também aceito no header Idempotency-Key.
+  idempotencyKey: z.string().max(200, "Máximo de 200 caracteres.").optional(),
 });
 
 /**
@@ -39,7 +42,15 @@ const bodySchema = z.object({
  * an image. `type` defaults to the generic "compra_confirmada" when
  * omitted.
  */
+// O recibo agenda o convite pós-corrida e, em after(), espera 3-4,5 min e
+// envia (ver scheduleInlineRideFollowUpDispatch) — precisa de folga aqui.
+export const maxDuration = 300;
+
 export const POST = createApiKeyHandler({
   bodySchema,
-  handler: async ({ body, apiKey }) => sendPurchaseConfirmation(apiKey, body),
+  handler: async ({ body, apiKey, request }) =>
+    sendPurchaseConfirmation(apiKey, {
+      ...body,
+      idempotencyKey: request.headers.get("idempotency-key")?.trim() || body.idempotencyKey,
+    }),
 });

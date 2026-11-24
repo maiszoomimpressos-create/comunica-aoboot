@@ -58,9 +58,10 @@ test("intervalo entre imagem e link: 3 a 6 s", () => {
   }
 });
 
-test("atraso entre 3 e 5 minutos", () => {
+test("atraso entre 3 e 4,5 minutos (cabe no maxDuration 300 s do recibo)", () => {
   for (let i = 0; i < 50; i++) {
     const d = randomAppPromoDelayMs();
     assert.ok(d >= APP_PROMO_MIN_DELAY_MS && d <= APP_PROMO_MAX_DELAY_MS);
+    assert.ok(d >= 180_000 && d <= 270_000);
   }
 });
