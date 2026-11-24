@@ -20,6 +20,8 @@ export interface AppPromoSettingsInput {
   linkTitle: string | null;
   linkDescription: string | null;
   linkImageUrl: string | null;
+  shortLinkSlug: string | null;
+  shortLinkUrl: string | null;
 }
 
 export function upsertAppPromoSettings(connectionId: string, input: AppPromoSettingsInput) {

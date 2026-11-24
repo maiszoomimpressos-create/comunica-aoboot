@@ -7,6 +7,7 @@ import { NotFoundError, ValidationError } from "@/lib/server/errors";
 import { getConnectionSummary } from "@/repositories/channel-connection.repository";
 import {
   getAppPromoSettings,
+  getTenantMessageNames,
   upsertAppPromoSettings,
 } from "@/repositories/app-promo-settings.repository";
 import {
@@ -31,6 +32,8 @@ import {
   renderAppPromoLinkMessage,
   renderAppPromoLinkTitle,
 } from "@/config/ride-receipt-app-promo";
+import { buildShortLinkUrl } from "@/config/short-links";
+import { ensureShortLinkForTenant, validateSlugOrThrow } from "@/services/short-link.service";
 
 /** Teto de envios por tick — cada envio são 2 mensagens com 3-6 s entre
  * elas, então 6 por tick cabem com folga no maxDuration (60 s) da rota;
@@ -184,7 +187,8 @@ async function processFollowUp(item: ClaimedRideReceiptFollowUp, now: Date, summ
 
   const businessName =
     connection.businessName || connection.organization.messageBusinessName || connection.organization.name;
-  const link = settings.playStoreUrl;
+  // Link curto próprio (/l/<slug>) quando configurado; senão o da Play Store.
+  const link = settings.shortLinkUrl || settings.playStoreUrl;
 
   const provider = getWhatsappProvider(connection.provider.key);
   const config = {
@@ -261,6 +265,7 @@ function normalizeHttpsUrl(value: string | null | undefined, fieldLabel: string)
 async function assertConnectionOfTenant(tenantId: string, connectionId: string) {
   const summary = await getConnectionSummary(tenantId, connectionId);
   if (!summary) throw new NotFoundError("Conexão não encontrada.");
+  return summary;
 }
 
 export interface UpdateAppPromoSettingsInput {
@@ -272,6 +277,10 @@ export interface UpdateAppPromoSettingsInput {
   linkTitle?: string | null;
   linkDescription?: string | null;
   linkImageUrl?: string | null;
+  /** Slug do link curto (/l/<slug>) usado na 2ª mensagem; vazio = link longo. */
+  shortLinkSlug?: string | null;
+  /** Domínio público pra montar a URL curta (a action passa o do painel). */
+  publicOrigin?: string | null;
 }
 
 export async function updateAppPromoSettingsForConnection(
@@ -279,7 +288,7 @@ export async function updateAppPromoSettingsForConnection(
   connectionId: string,
   input: UpdateAppPromoSettingsInput
 ) {
-  await assertConnectionOfTenant(tenantId, connectionId);
+  const connectionSummary = await assertConnectionOfTenant(tenantId, connectionId);
 
   const imageUrl = normalizeHttpsUrl(input.imageUrl, "Imagem");
   const playStoreUrl = normalizeHttpsUrl(input.playStoreUrl, "Link da Play Store");
@@ -306,6 +315,29 @@ export async function updateAppPromoSettingsForConnection(
     throw new ValidationError("Pra ligar o envio, informe a imagem e o link da Play Store.");
   }
 
+  const shortLinkSlug = validateSlugOrThrow(input.shortLinkSlug);
+  let shortLinkUrl: string | null = null;
+  if (shortLinkSlug) {
+    if (!playStoreUrl) throw new ValidationError("Pra usar o link curto, informe o link da Play Store.");
+    const origin = input.publicOrigin?.trim() || process.env.NEXT_PUBLIC_APP_URL?.trim();
+    if (!origin) throw new ValidationError("Não deu pra descobrir o domínio do link curto.");
+    const names = await getTenantMessageNames(tenantId);
+    const businessName =
+      connectionSummary.businessName || names?.messageBusinessName || names?.name || "";
+    await ensureShortLinkForTenant(
+      tenantId,
+      shortLinkSlug,
+      {
+        targetUrl: playStoreUrl,
+        title: renderAppPromoLinkTitle(linkTitle, businessName),
+        description: renderAppPromoLinkDescription(linkDescription, businessName),
+        imageUrl: linkImageUrl || imageUrl,
+      },
+      connectionId
+    );
+    shortLinkUrl = buildShortLinkUrl(origin, shortLinkSlug);
+  }
+
   const saved = await upsertAppPromoSettings(connectionId, {
     enabled: input.enabled,
     imageUrl,
@@ -315,6 +347,8 @@ export async function updateAppPromoSettingsForConnection(
     linkTitle,
     linkDescription,
     linkImageUrl,
+    shortLinkSlug,
+    shortLinkUrl,
   });
   return {
     enabled: saved.enabled,
@@ -325,6 +359,8 @@ export async function updateAppPromoSettingsForConnection(
     linkTitle: saved.linkTitle,
     linkDescription: saved.linkDescription,
     linkImageUrl: saved.linkImageUrl,
+    shortLinkSlug: saved.shortLinkSlug,
+    shortLinkUrl: saved.shortLinkUrl,
   };
 }
 

@@ -22,6 +22,7 @@ import {
   renderAppPromoLinkMessage,
   renderAppPromoLinkTitle,
 } from "@/config/ride-receipt-app-promo";
+import { SHORT_LINK_PATH_PREFIX, buildShortLinkUrl, normalizeShortLinkSlug } from "@/config/short-links";
 import { updateAppPromoSettingsAction } from "@/actions/whatsapp/update-app-promo-settings";
 import { uploadAppPromoImageAction } from "@/actions/whatsapp/upload-app-promo-image";
 
@@ -34,6 +35,8 @@ export interface AppPromoSettingsValues {
   linkTitle?: string | null;
   linkDescription?: string | null;
   linkImageUrl?: string | null;
+  shortLinkSlug?: string | null;
+  shortLinkUrl?: string | null;
 }
 
 /** Abaixo do limite de 1 MB do corpo de Server Action (com folga pro
@@ -80,6 +83,7 @@ export function AppPromoSettingsCard({
   businessName,
   receiptTypeEnabled,
   initial,
+  publicOrigin,
 }: {
   tenantSlug: string;
   connectionId: string;
@@ -88,6 +92,8 @@ export function AppPromoSettingsCard({
   /** "Corrida concluída" está marcado nas funções desta conexão? */
   receiptTypeEnabled: boolean;
   initial: AppPromoSettingsValues | null;
+  /** Domínio do painel, pra mostrar a URL curta (/l/<slug>). */
+  publicOrigin: string;
 }) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -99,12 +105,15 @@ export function AppPromoSettingsCard({
   const [linkTitle, setLinkTitle] = useState(initial?.linkTitle ?? "");
   const [linkDescription, setLinkDescription] = useState(initial?.linkDescription ?? "");
   const [linkImageUrl, setLinkImageUrl] = useState(initial?.linkImageUrl ?? "");
+  const [shortLinkSlug, setShortLinkSlug] = useState(initial?.shortLinkSlug ?? "");
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
-  const previewLink = playStoreUrl.trim() || "https://play.google.com/store/apps/details?id=…";
+  const normalizedSlug = normalizeShortLinkSlug(shortLinkSlug);
+  const shortUrlPreview = normalizedSlug ? buildShortLinkUrl(publicOrigin, normalizedSlug) : null;
+  const previewLink = shortUrlPreview || playStoreUrl.trim() || "https://play.google.com/store/apps/details?id=…";
   const preview = renderAppPromoImageCaption(caption, { businessName, link: playStoreUrl.trim() || undefined });
   const linkPreview = renderAppPromoLinkMessage(linkMessage, { link: previewLink, businessName });
   const linkPreviewTitle = renderAppPromoLinkTitle(linkTitle, businessName);
@@ -150,6 +159,7 @@ export function AppPromoSettingsCard({
       linkTitle: linkTitle.trim() || null,
       linkDescription: linkDescription.trim() || null,
       linkImageUrl: linkImageUrl.trim() || null,
+      shortLinkSlug: normalizedSlug,
     });
     setSaving(false);
     if (!result.success) {
@@ -303,6 +313,29 @@ export function AppPromoSettingsCard({
                 placeholder={DEFAULT_APP_PROMO_LINK_DESCRIPTION}
               />
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor={`app-promo-short-link-${connectionId}`}>Link curto (opcional)</Label>
+            <div className="flex items-center gap-1">
+              <span className="shrink-0 text-sm text-muted-foreground">
+                {publicOrigin.replace(/^https?:\/\//, "")}
+                {SHORT_LINK_PATH_PREFIX}
+              </span>
+              <Input
+                id={`app-promo-short-link-${connectionId}`}
+                value={shortLinkSlug}
+                onChange={(e) => {
+                  setSaved(false);
+                  setShortLinkSlug(e.target.value);
+                }}
+                placeholder="app"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Com um nome aqui, a mensagem leva o link curto no lugar do link comprido da Play Store (ele aparece também
+              em Links curtos, com o contador de cliques). Em branco, usa o link da Play Store.
+            </p>
           </div>
 
           <div className="space-y-1.5">

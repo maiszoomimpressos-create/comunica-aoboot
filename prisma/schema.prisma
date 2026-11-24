@@ -143,6 +143,7 @@ model Organization {
   setores               Setor[]
   segmentos             Segmento[]
   advertisements        Advertisement[]
+  shortLinks            ShortLink[]
 
   @@index([status])
   @@map("organization")
@@ -1686,6 +1687,11 @@ model AppPromoSettings {
   linkTitle       String?
   linkDescription String?
   linkImageUrl    String?
+  // Link curto (ver ShortLink / "Links curtos"): slug escolhido no card e a
+  // URL completa montada no salvamento (domínio do painel + /l/<slug>). Com
+  // ele, a 2ª mensagem usa o link curto no texto e no linkUrl do send-link.
+  shortLinkSlug   String?
+  shortLinkUrl    String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -1693,6 +1699,31 @@ model AppPromoSettings {
   connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@map("app_promo_settings")
+}
+
+// Encurtador de link (ferramenta do painel "Links curtos", multi-empresa):
+// GET /l/<slug> → 302 pro targetUrl (humanos) ou HTML com Open Graph
+// (crawlers de prévia: WhatsApp, facebookexternalhit…). Slug único no
+// sistema todo (a URL pública não tem empresa). Cada empresa só vê/edita os
+// seus (tenantId). connectionId: opcional, quando o link nasceu de uma
+// conexão (convite pós-corrida) — sem FK, o link sobrevive.
+model ShortLink {
+  id           String       @id @default(cuid())
+  tenantId     String
+  tenant       Organization @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  slug         String       @unique
+  targetUrl    String
+  title        String?
+  description  String?
+  imageUrl     String?
+  clicks       Int          @default(0)
+  lastClickAt  DateTime?
+  connectionId String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([tenantId, createdAt])
+  @@map("short_link")
 }
 
 enum RideReceiptFollowUpStatus {
