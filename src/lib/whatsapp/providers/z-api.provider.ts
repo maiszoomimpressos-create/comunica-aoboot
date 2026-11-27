@@ -14,6 +14,7 @@ import type {
   SendMessageOptions,
   SendMessageResult,
   TestConnectionResult,
+  UpdateWebhookResult,
   WhatsappConnectionConfig,
 } from "../types";
 import { pickZapiContactName } from "../contact-name";
@@ -663,6 +664,44 @@ export class ZApiProvider implements WhatsappProvider {
       };
     }
     return { ok: true, message: "Mensagem apagada.", raw: data };
+  }
+
+  /** `PUT .../update-webhook-chat-presence` — `{ value: "<url>" }`
+   * registers the instance's chat-presence webhook; `{ value: "" }` clears
+   * it (used to disable). Confirmed directly against a real Z-API trial
+   * instance (both calls returned `{ value: true }`) — the
+   * `PresenceChatCallback` event itself is still only confirmed against
+   * Z-API's documented examples, not a live delivery (see
+   * PRESENCE_EVENT_TYPE in whatsapp-connection.service.ts). Z-API itself
+   * recommends against leaving this on for every connection (throttling/
+   * cost) — enforced by setPresenceTrackingEnabled being opt-in, not here. */
+  async updateChatPresenceWebhook(
+    config: WhatsappConnectionConfig,
+    webhookUrl: string
+  ): Promise<UpdateWebhookResult> {
+    const url = `${trimTrailingSlash(config.apiUrl)}/update-webhook-chat-presence`;
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(url, {
+        method: "PUT",
+        headers: buildHeaders(config.apiToken, { "Content-Type": "application/json" }),
+        body: JSON.stringify({ value: webhookUrl }),
+      });
+    } catch {
+      return { ok: false, message: "Falha de comunicação ao configurar o webhook de presença." };
+    }
+
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      return {
+        ok: false,
+        message:
+          (data as { error?: string } | null)?.error ??
+          `Erro ao configurar webhook de presença (HTTP ${response.status}).`,
+        raw: data,
+      };
+    }
+    return { ok: true, message: "Webhook de presença configurado.", raw: data };
   }
 
   /** Shared POST-JSON-parse-response plumbing behind send-text/send-image —

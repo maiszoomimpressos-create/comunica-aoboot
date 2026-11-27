@@ -447,6 +447,17 @@ model ChannelConnection {
   // uma autentica quem nos chama, a outra autentica quem a Z-API chama).
   webhookSecret String?
 
+  // Rastreamento de presença por contato (online/digitando/gravando áudio),
+  // via webhook passivo da Z-API (PresenceChatCallback — ver
+  // contact-presence.repository.ts e PRESENCE_EVENT_TYPE em
+  // whatsapp-connection.service.ts). Opt-in por conexão, default desligado:
+  // a própria Z-API recomenda não deixar ligado pra todo mundo (gera
+  // throttling/custo), além de depender da privacidade de cada contato no
+  // WhatsApp (se a pessoa desligou "visto por último"/online, nada chega).
+  // Ligar/desligar aqui também registra (ou limpa) a URL do webhook de
+  // presença na instância Z-API — ver setPresenceTrackingEnabled.
+  presenceTrackingEnabled Boolean @default(false)
+
   // Números fixos (até 3) que recebem o alerta de saldo baixo disparado
   // pelo sistema externo do tenant via POST /api/v1/whatsapp/balance-alert
   // — cadastrados pelo tenant no painel, nunca enviados pelo chamador da
@@ -500,9 +511,34 @@ model ChannelConnection {
   advertisements           Advertisement[]
   appPromoSettings         AppPromoSettings?
   rideReceiptFollowUps     RideReceiptFollowUp[]
+  contactPresences         ContactPresence[]
 
   @@index([tenantId, channelId])
   @@map("channel_connection")
+}
+
+// Último status de presença conhecido de um contato numa conexão — vem do
+// webhook passivo da Z-API (PresenceChatCallback, ver
+// developer.z-api.io/webhooks/on-chat-presence). Upsert por
+// (connectionId, phone): guarda só o estado mais recente, não um histórico
+// — eventos de presença chegam com muita frequência (COMPOSING/PAUSED a
+// cada poucos segundos) pra valer a pena acumular linha por linha.
+model ContactPresence {
+  id       String    @id @default(cuid())
+  phone    String
+  // AVAILABLE | UNAVAILABLE | COMPOSING | PAUSED | RECORDING — valores da
+  // própria Z-API, guardados como vieram (sem enum) pra não quebrar se a
+  // Z-API adicionar um novo status no futuro.
+  status   String
+  lastSeen DateTime?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  connectionId String
+  connection   ChannelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, phone])
+  @@map("contact_presence")
 }
 
 enum SegmentoNiche {
