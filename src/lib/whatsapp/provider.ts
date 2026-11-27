@@ -11,6 +11,7 @@ import type {
   SendLinkButtonsResult,
   SendMessageResult,
   TestConnectionResult,
+  UpdateWebhookResult,
   WhatsappConnectionConfig,
 } from "./types";
 
@@ -136,4 +137,15 @@ export interface WhatsappProvider {
     phone: string,
     messageId: string
   ): Promise<SendMessageResult>;
+  /** Optional: registers (or clears, when `webhookUrl` is an empty string)
+   * the instance's chat-presence webhook URL (Z-API
+   * `update-webhook-chat-presence`) — the passive, opt-in-only mechanism
+   * that later delivers `PresenceChatCallback` events (contact
+   * online/typing/recording) to that URL. Providers without this concept
+   * just don't implement it; callers treat a missing implementation the
+   * same as a failed call (see setPresenceTrackingEnabled). Never throws. */
+  updateChatPresenceWebhook?(
+    config: WhatsappConnectionConfig,
+    webhookUrl: string
+  ): Promise<UpdateWebhookResult>;
 }

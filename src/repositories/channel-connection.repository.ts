@@ -31,6 +31,10 @@ export interface ChannelConnectionSummary {
   // Config do atendente de IA (ver bot-attendant.service.ts) — null quando
   // o tenant nunca salvou nada ainda (equivale a desativado).
   botConfig: { enabled: boolean; businessProfile: string | null; verticalId: string | null } | null;
+  // Rastreamento de presença por contato (webhook de chat-presence da
+  // Z-API) — opt-in, default false. Ver setPresenceTrackingEnabled em
+  // whatsapp-connection.service.ts.
+  presenceTrackingEnabled: boolean;
 }
 
 const summarySelect = {
@@ -51,6 +55,7 @@ const summarySelect = {
   enabledServices: true,
   enabledNotificationTypes: true,
   botConfig: { select: { enabled: true, businessProfile: true, verticalId: true } },
+  presenceTrackingEnabled: true,
 } as const;
 
 /** Get-or-create the tenant's channel row for a given type (WHATSAPP, ...). */
@@ -151,6 +156,21 @@ export function updateEnabledNotificationTypes(tenantId: string, connectionId: s
   return prisma.channelConnection.updateMany({
     where: { id: connectionId, tenantId },
     data: { enabledNotificationTypes: types },
+  });
+}
+
+/** Liga/desliga o flag de rastreamento de presença — a chamada que
+ * efetivamente registra/limpa o webhook na instância Z-API acontece em
+ * setPresenceTrackingEnabled (whatsapp-connection.service.ts); aqui é só a
+ * persistência do flag em si. */
+export function updateConnectionPresenceTrackingFlag(
+  tenantId: string,
+  connectionId: string,
+  presenceTrackingEnabled: boolean
+) {
+  return prisma.channelConnection.updateMany({
+    where: { id: connectionId, tenantId },
+    data: { presenceTrackingEnabled },
   });
 }
 

@@ -92,6 +92,15 @@ export interface SendMessageOptions {
   delayMessage?: number;
 }
 
+/** Resultado de configurar (ou limpar) a URL de um webhook na instância do
+ * provedor — ex.: Z-API `update-webhook-chat-presence`. Never throws, same
+ * convention as every other provider method. */
+export interface UpdateWebhookResult {
+  ok: boolean;
+  message: string;
+  raw?: unknown;
+}
+
 export interface QrCodeResult {
   ok: boolean;
   /** `data:image/png;base64,...` data URI, present only when ok. */

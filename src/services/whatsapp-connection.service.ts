@@ -57,9 +57,11 @@ import {
   updateEnabledServices,
   updateEnabledNotificationTypes,
   updateConnectionStatusById,
+  updateConnectionPresenceTrackingFlag,
   type ChannelConnectionSummary,
 } from "@/repositories/channel-connection.repository";
 import { getProviderByKey } from "@/repositories/channel-provider.repository";
+import { upsertContactPresence, getContactPresence } from "@/repositories/contact-presence.repository";
 import { handleInboundMessage } from "./bot-attendant.service";
 import { tryClaimInboundMessage } from "@/repositories/bot.repository";
 import { tryHandleRelayMessage } from "@/services/relay-session.service";
@@ -474,6 +476,79 @@ export async function ensureWebhookUrl(tenantId: string, connectionId: string): 
   return `${baseUrl}/api/webhooks/zapi/${connectionId}?secret=${secret}`;
 }
 
+/**
+ * Tenant-facing: liga/desliga o rastreamento de presença (online/digitando/
+ * gravando áudio) desta conexão. Opt-in e desligado por padrão — a própria
+ * Z-API recomenda não deixar isso ligado pra toda conexão (throttling/
+ * custo), e o dado só chega mesmo se o contato não tiver desativado "visto
+ * por último"/online no WhatsApp dele.
+ *
+ * Ligar registra a MESMA URL de webhook usada pra todo o resto
+ * (ensureWebhookUrl — ela já multiplexa por `type` dentro de
+ * recordWebhookEvent, nenhuma rota nova precisa existir) como o
+ * `update-webhook-chat-presence` da instância Z-API; desligar limpa esse
+ * campo na instância (`value: ""`) e apaga o flag local. Lança se a
+ * conexão não tiver credenciais ainda, ou se o provider não suportar o
+ * recurso; uma falha da CHAMADA ao desligar é só logada (nunca bloqueia o
+ * tenant de desligar o que já pediu pra desligar).
+ */
+export async function setPresenceTrackingEnabled(
+  tenantId: string,
+  connectionId: string,
+  enabled: boolean
+): Promise<ChannelConnectionSummary> {
+  const connection = await getConnectionWithSecret(tenantId, connectionId);
+  if (!connection) throw new NotFoundError("Conexão não encontrada.");
+  if (!connection.apiUrl || !connection.apiTokenCipher) {
+    throw new ConflictError("Esta conexão ainda não foi configurada.");
+  }
+
+  const provider = getWhatsappProvider(connection.provider.key);
+  if (!provider.updateChatPresenceWebhook) {
+    throw new ValidationError("Este provedor não suporta rastreamento de presença.");
+  }
+
+  const apiToken = decryptSecret(connection.apiTokenCipher);
+  const config = { apiUrl: connection.apiUrl, apiToken, phoneNumber: connection.phoneNumber };
+
+  if (enabled) {
+    const webhookUrl = await ensureWebhookUrl(tenantId, connectionId);
+    const result = await provider.updateChatPresenceWebhook(config, webhookUrl);
+    if (!result.ok) {
+      throw new ConflictError(`Não foi possível ativar o rastreamento de presença: ${result.message}`);
+    }
+  } else {
+    const result = await provider.updateChatPresenceWebhook(config, "");
+    if (!result.ok) {
+      await logBotEvent("warn", "presence_webhook_clear_failed", { connectionId, error: result.message });
+    }
+  }
+
+  const updateResult = await updateConnectionPresenceTrackingFlag(tenantId, connectionId, enabled);
+  if (updateResult.count === 0) throw new NotFoundError("Conexão não encontrada.");
+
+  const summary = await getConnectionSummary(tenantId, connectionId);
+  if (!summary) throw new NotFoundError("Conexão atualizada, mas não encontrada ao recarregar.");
+  return summary;
+}
+
+/** Tenant-facing: último status de presença conhecido (online/digitando/
+ * gravando áudio/offline) de um telefone nesta conexão — `null` quando
+ * nunca chegou nenhum evento pra esse número (rastreamento desligado,
+ * contato com privacidade restrita no WhatsApp, ou nunca trocou mensagem
+ * com essa instância). Verifica a posse da conexão (tenantId) antes de
+ * consultar — a leitura em si não exige presenceTrackingEnabled=true
+ * (desligar não apaga o histórico já guardado, só para de atualizar). */
+export async function getContactPresenceStatus(
+  tenantId: string,
+  connectionId: string,
+  phone: string
+) {
+  const connection = await getConnectionSummary(tenantId, connectionId);
+  if (!connection) throw new NotFoundError("Conexão não encontrada.");
+  return getContactPresence(connectionId, phone);
+}
+
 /** Z-API's own event-name convention, confirmed for real against the
  * trial instance for "MessageStatusCallback" (see WebhookEvent rows).
  * "ConnectedCallback"/"DisconnectedCallback" follow the same naming
@@ -492,6 +567,18 @@ const DISCONNECTED_EVENT_TYPE = "DisconnectedCallback";
  * auth needed to download (see transcribeAudio in bot-attendant.service.ts
  * for why its Content-Type still needs normalizing before Whisper). */
 const MESSAGE_RECEIVED_EVENT_TYPE = "ReceivedCallback";
+/** Z-API's type for a chat-presence event (contact online/typing/recording
+ * — see developer.z-api.io/webhooks/on-chat-presence), confirmed against
+ * the docs' example payloads. Only arrives for connections that opted in
+ * via setPresenceTrackingEnabled below, which registers this instance's
+ * `update-webhook-chat-presence` URL — pointed at the SAME webhook route as
+ * every other event type (no separate endpoint), same multiplexing as
+ * CONNECTED_EVENT_TYPE/MESSAGE_RECEIVED_EVENT_TYPE above. */
+const PRESENCE_EVENT_TYPE = "PresenceChatCallback";
+/** Status values Z-API sends on a PresenceChatCallback — kept as a const
+ * array (not a schema enum) so an unrecognized future value from Z-API
+ * still gets stored as-is instead of failing the upsert. */
+const KNOWN_PRESENCE_STATUSES = ["AVAILABLE", "UNAVAILABLE", "COMPOSING", "PAUSED", "RECORDING"] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -549,6 +636,40 @@ async function applyConnectionStatusFromWebhook(
       lastError: "Sessão desconectada — detectado via webhook, escaneie o QR code novamente.",
     });
   }
+}
+
+/** Upserts the latest known presence for a contact whenever a
+ * PresenceChatCallback lands — no-op for any other event type. Never
+ * throws (same convention as the rest of this webhook path): a malformed
+ * payload (missing phone/status) is just ignored, the raw event is still
+ * logged by createWebhookEvent either way. Doesn't check
+ * `presenceTrackingEnabled` here — if Z-API is sending this event at all,
+ * it's because the connection asked for it via setPresenceTrackingEnabled,
+ * so trusting the event itself is enough; re-checking the flag would just
+ * create a window where a race with disabling drops a still-in-flight
+ * event for no real benefit. */
+async function applyPresenceFromWebhook(connectionId: string, payload: unknown): Promise<void> {
+  if (!isRecord(payload) || payload.type !== PRESENCE_EVENT_TYPE) return;
+
+  const phone = payload.phone;
+  const status = payload.status;
+  if (typeof phone !== "string" || !phone.trim() || typeof status !== "string" || !status.trim()) return;
+
+  const lastSeenRaw = payload.lastSeen;
+  // Z-API docs show `lastSeen` as a Unix timestamp (seconds) or null in
+  // every example payload seen so far — never confirmed non-null against a
+  // real instance yet, so this defensively accepts either seconds or
+  // milliseconds (a seconds value would otherwise land in 1970).
+  const lastSeen =
+    typeof lastSeenRaw === "number" && lastSeenRaw > 0
+      ? new Date(lastSeenRaw < 1e12 ? lastSeenRaw * 1000 : lastSeenRaw)
+      : null;
+
+  if (!KNOWN_PRESENCE_STATUSES.includes(status as (typeof KNOWN_PRESENCE_STATUSES)[number])) {
+    await logBotEvent("info", "presence_unknown_status", { connectionId, phone, status });
+  }
+
+  await upsertContactPresence(connectionId, phone, { status, lastSeen });
 }
 
 /** Hands an inbound text message to the AI attendant (see
@@ -700,6 +821,9 @@ export async function recordWebhookEvent(connectionId: string, payload: unknown)
   await createWebhookEvent(connectionId, "z-api", payload);
   await applyConnectionStatusFromWebhook(connectionId, payload).catch((err) => {
     void logBotEvent("error", "apply_connection_status_failed", { connectionId, error: serializeError(err) });
+  });
+  await applyPresenceFromWebhook(connectionId, payload).catch((err) => {
+    void logBotEvent("error", "apply_presence_failed", { connectionId, error: serializeError(err) });
   });
   // Publicidades: o RECEIVED de um recibo libera a publicidade da fila
   // (30 s depois, em after()). Outros eventos: não faz nada. Nunca lança.
