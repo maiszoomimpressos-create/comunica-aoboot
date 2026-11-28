@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Trash2, RefreshCw, Send, Smartphone, Users, Bot } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -110,100 +111,59 @@ export function ConnectionCard({
 
       {canManage && (
         <>
-          <div className="mt-4 flex flex-wrap items-center gap-2">
+          <div className="mt-4 space-y-3">
+            {/* Pra onde ir: os módulos que usam esta conexão no dia a dia. */}
             {isFullyConnected && (
-              <Button variant="outline" size="sm" onClick={() => setShowSend((v) => !v)}>
-                {showSend ? "Fechar" : "Enviar mensagem de teste"}
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  nativeButton={false}
+                  render={<Link href={`/app/${tenantSlug}/modulos/whatsapp/atendimento/${connection.id}/ia`} />}
+                >
+                  <Bot className="size-4" />
+                  Atendente de IA
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  nativeButton={false}
+                  render={<Link href={`/app/${tenantSlug}/modulos/whatsapp/setores/${connection.id}`} />}
+                >
+                  <Users className="size-4" />
+                  Setores
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  nativeButton={false}
+                  render={<Link href={`/app/${tenantSlug}/modulos/whatsapp/campanhas/${connection.id}`} />}
+                >
+                  <Send className="size-4" />
+                  Campanhas
+                </Button>
+              </div>
             )}
-            {isConfigured && (
-              <Button variant="outline" size="sm" onClick={handleRetest} disabled={retesting}>
-                <RefreshCw className={cn("size-4", retesting && "animate-spin")} />
-                {retesting ? "Testando…" : isAwaitingQrScan ? "Verificar conexão" : "Testar novamente"}
-              </Button>
-            )}
-            <EditConnectionDialog
-              tenantSlug={tenantSlug}
-              connectionId={connection.id}
-              defaultValues={{
-                connectionName: connection.connectionName,
-                phoneNumber: connection.phoneNumber,
-                businessName: connection.businessName ?? "",
-              }}
-            />
-            {isFullyConnected && (
-              <Button
-                variant="outline"
-                size="sm"
-                nativeButton={false}
-                render={<Link href={`/app/${tenantSlug}/modulos/whatsapp/campanhas/${connection.id}`} />}
-              >
-                <Send className="size-4" />
-                Campanhas
-              </Button>
-            )}
-            {isFullyConnected && (
-              <Button
-                variant="outline"
-                size="sm"
-                nativeButton={false}
-                render={<Link href={`/app/${tenantSlug}/modulos/whatsapp/setores/${connection.id}`} />}
-              >
-                <Users className="size-4" />
-                Setores
-              </Button>
-            )}
-            {isFullyConnected && (
-              <Button
-                variant="outline"
-                size="sm"
-                nativeButton={false}
-                render={<Link href={`/app/${tenantSlug}/modulos/whatsapp/atendimento/${connection.id}/ia`} />}
-              >
-                <Bot className="size-4" />
-                Atendente de IA
-              </Button>
-            )}
-            {isFullyConnected && (
-              <Button variant="outline" size="sm" onClick={() => setShowDisconnectHelp((v) => !v)}>
-                <Smartphone className="size-4" />
-                Trocar número
-              </Button>
-            )}
-            {isFullyConnected && (
-              <EnabledServicesDialog
-                tenantSlug={tenantSlug}
-                connectionId={connection.id}
-                defaultServices={connection.enabledServices}
-              />
-            )}
-            {isFullyConnected && connection.enabledServices.includes("balance_alert") && (
-              <BalanceAlertPhonesDialog
-                tenantSlug={tenantSlug}
-                connectionId={connection.id}
-                defaultPhones={connection.balanceAlertPhones}
-              />
-            )}
-            <AlertDialog>
-              <AlertDialogTrigger render={<Button variant="ghost" size="sm" disabled={deleting} />}>
-                <Trash2 className="size-4" />
-                Remover
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Remover {connection.connectionName}?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    {isConfigured
-                      ? "A empresa deixará de conseguir enviar mensagens por este número até que uma nova conexão seja criada."
-                      : "Essa solicitação será cancelada."}
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                  <AlertDialogAction onClick={handleDelete}>Remover</AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+
+            {/* Saúde da conexão: testar, enviar um teste, trocar o aparelho. */}
+            <div className="flex flex-wrap items-center gap-2">
+              {isFullyConnected && (
+                <Button variant="outline" size="sm" onClick={() => setShowSend((v) => !v)}>
+                  {showSend ? "Fechar teste" : "Enviar mensagem de teste"}
+                </Button>
+              )}
+              {isConfigured && (
+                <Button variant="ghost" size="sm" onClick={handleRetest} disabled={retesting}>
+                  <RefreshCw className={cn("size-4", retesting && "animate-spin")} />
+                  {retesting ? "Testando…" : isAwaitingQrScan ? "Verificar conexão" : "Testar novamente"}
+                </Button>
+              )}
+              {isFullyConnected && (
+                <Button variant="ghost" size="sm" onClick={() => setShowDisconnectHelp((v) => !v)}>
+                  <Smartphone className="size-4" />
+                  Trocar número
+                </Button>
+              )}
+            </div>
           </div>
 
           {showSend && isFullyConnected && (
@@ -234,6 +194,60 @@ export function ConnectionCard({
               </ol>
             </div>
           )}
+
+          <Separator className="mt-4" />
+
+          {/* Configurações administrativas: editar dados, escopo da chave de
+              API e remoção — usadas bem menos que as ações acima, por isso
+              ficam visualmente mais discretas e separadas. */}
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <EditConnectionDialog
+                tenantSlug={tenantSlug}
+                connectionId={connection.id}
+                defaultValues={{
+                  connectionName: connection.connectionName,
+                  phoneNumber: connection.phoneNumber,
+                  businessName: connection.businessName ?? "",
+                }}
+              />
+              {isFullyConnected && (
+                <EnabledServicesDialog
+                  tenantSlug={tenantSlug}
+                  connectionId={connection.id}
+                  defaultServices={connection.enabledServices}
+                />
+              )}
+              {isFullyConnected && connection.enabledServices.includes("balance_alert") && (
+                <BalanceAlertPhonesDialog
+                  tenantSlug={tenantSlug}
+                  connectionId={connection.id}
+                  defaultPhones={connection.balanceAlertPhones}
+                />
+              )}
+            </div>
+
+            <AlertDialog>
+              <AlertDialogTrigger render={<Button variant="ghost" size="sm" disabled={deleting} />}>
+                <Trash2 className="size-4" />
+                Remover
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Remover {connection.connectionName}?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {isConfigured
+                      ? "A empresa deixará de conseguir enviar mensagens por este número até que uma nova conexão seja criada."
+                      : "Essa solicitação será cancelada."}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleDelete}>Remover</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
 
           {isFullyConnected && (
             <ApiKeySection
